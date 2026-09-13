@@ -8,8 +8,7 @@ secret_vars_file: data/secret_vars.xlsx
 # 环境配置：base_url 用于拼接用例中的相对路径；default_headers 与用例请求头合并（用例优先）
 env:
   test:
-    # base_url: https://httpbin.org
-    base_url: https://xie392.cn
+    base_url: https://httpbin.org
     timeout: 15
     default_headers:
       User-Agent: interface-auto/1.0
