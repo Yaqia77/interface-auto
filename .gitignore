@@ -12,6 +12,12 @@ reports/
 logs/
 .pytest_cache/
 
+# 敏感凭证文件（本地填写真实账号密码，不入库；模板见 data/secret_vars_template.xlsx）
+data/secret_vars.xlsx
+
+# Excel 打开时的临时文件
+~$*
+
 # IDE
 .idea/
 .vscode/

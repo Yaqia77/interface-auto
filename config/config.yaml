@@ -1,10 +1,15 @@
 # 全局配置
 default_env: test
 
+# 凭证变量文件（账号密码等敏感信息，已加入 .gitignore 不入库）
+# 从 data/secret_vars_template.xlsx 复制为该文件名并填入真实值，程序运行时自动加载
+secret_vars_file: data/secret_vars.xlsx
+
 # 环境配置：base_url 用于拼接用例中的相对路径；default_headers 与用例请求头合并（用例优先）
 env:
   test:
-    base_url: https://httpbin.org
+    # base_url: https://httpbin.org
+    base_url: https://xie392.cn
     timeout: 15
     default_headers:
       User-Agent: interface-auto/1.0

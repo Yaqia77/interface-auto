@@ -98,7 +98,7 @@ GUIDE_SECTIONS = [
     ]),
     ("三、变量机制", [
         ["写法", "", "{{变量名}}，可用在 请求路径/请求头/查询参数/请求体/断言期望值"],
-        ["优先级", "", "运行时变量提取 > 全局变量表 > config.yaml（提供 base_url）"],
+        ["优先级", "", "运行时变量提取 > 凭证文件 secret_vars.xlsx > 全局变量表 > config.yaml（提供 base_url）"],
         ["类型保留", "", 'JSON 列中占位符必须写在引号内，如 {"id":"{{post_id}}"}；当整个值就是一个占位符时，替换后保留原始类型（数字/布尔）'],
         ["依赖顺序", "", "用例严格按行号顺序串行执行，后面的用例可使用前面用例提取的变量（如先登录提 token 再访问鉴权接口）"],
         ["筛选提醒", "", "按 --module/--priority/--keyword 筛选时，被依赖的用例（如提取 token 的登录用例）需同时被选中，否则会报「变量未定义」"],
@@ -115,6 +115,49 @@ GUIDE_SECTIONS = [
 def _j(value) -> str:
     """紧凑 JSON 文本（用于演示用例的 JSON 列，保证写出的就是标准 JSON）。"""
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+SECRET_TEMPLATE_VARS = [
+    ["username", "<填写真实账号>", "测试账号（会覆盖用例 Excel 全局变量表中的同名变量）"],
+    ["password", "<填写真实密码>", "测试密码"],
+]
+
+SECRET_GUIDE = [
+    ["使用步骤", ""],
+    ["1", "复制本文件，重命名为 secret_vars.xlsx（与本文件同目录 data/ 下）"],
+    ["2", "在 secret_vars.xlsx 中填入真实账号密码等敏感信息"],
+    ["3", "secret_vars.xlsx 已被 .gitignore 忽略，不会被提交到 Git 仓库"],
+    ["4", "运行时自动加载（路径由 config.yaml 的 secret_vars_file 配置），变量优先级高于用例 Excel 的全局变量表"],
+    ["5", "本模板文件仅作样板，程序不会加载它；可按需增删变量行（如 token、验证码等）"],
+]
+
+
+def build_secret_template() -> Workbook:
+    """生成凭证变量模板：全局变量 Sheet + 使用说明 Sheet。"""
+    wb = Workbook()
+
+    ws = wb.active
+    ws.title = "全局变量"
+    header_fill = PatternFill("solid", fgColor="C00000")
+    header_font = Font(bold=True, color="FFFFFF")
+    for col, header in enumerate(["变量名", "值", "备注"], start=1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = header_font
+    for row_no, var in enumerate(SECRET_TEMPLATE_VARS, start=2):
+        for col, value in enumerate(var, start=1):
+            ws.cell(row=row_no, column=col, value=value)
+    ws.column_dimensions["A"].width = 18
+    ws.column_dimensions["B"].width = 26
+    ws.column_dimensions["C"].width = 52
+
+    ws2 = wb.create_sheet("使用说明")
+    for row_no, line in enumerate(SECRET_GUIDE, start=1):
+        for col, value in enumerate(line, start=1):
+            ws2.cell(row=row_no, column=col, value=value)
+    ws2.column_dimensions["A"].width = 12
+    ws2.column_dimensions["B"].width = 90
+    return wb
 
 
 def build_workbook() -> Workbook:
@@ -190,6 +233,12 @@ def main() -> None:
     wb.save(output)
     print(f"模板已生成: {output}")
     print(f"共写入 {len(DEMO_CASES)} 条演示用例、{len(GLOBAL_VARS)} 个全局变量")
+
+    # 凭证变量模板（直接覆盖：仅是样板文件，程序不加载）
+    secret_output = output.parent / "secret_vars_template.xlsx"
+    build_secret_template().save(secret_output)
+    print(f"凭证模板已生成: {secret_output}")
+    print("使用方法: 复制该文件为 secret_vars.xlsx，填入真实账号密码（该文件不入 Git 仓库）")
 
 
 if __name__ == "__main__":

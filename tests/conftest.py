@@ -10,6 +10,7 @@ import pytest  # noqa: E402
 
 from core.context import Context, get_env_config, load_config  # noqa: E402
 from core.excel_loader import load as load_excel  # noqa: E402
+from core.excel_loader import load_secret_vars  # noqa: E402
 from core.http_client import HttpExecutor  # noqa: E402
 from core.runner import setup_logging  # noqa: E402
 
@@ -77,9 +78,17 @@ def excel_data(request):
 
 @pytest.fixture(scope="session")
 def context(app_config, excel_data):
-    """Session 级共享变量池：YAML 环境变量 < Excel 全局变量 < 运行时提取值。"""
+    """Session 级共享变量池。
+
+    优先级：运行时提取值 > 凭证文件 secret_vars > 用例 Excel 全局变量 > YAML 配置。
+    """
     yaml_vars = {"base_url": app_config["env"].get("base_url", "")}
-    return Context(yaml_vars, excel_data.variables)
+    secret_path = Path(app_config["config"].get("secret_vars_file", "data/secret_vars.xlsx"))
+    if not secret_path.is_absolute():
+        secret_path = ROOT / secret_path
+    merged_vars = dict(excel_data.variables)
+    merged_vars.update(load_secret_vars(secret_path))  # 凭证文件覆盖用例文件同名变量
+    return Context(yaml_vars, merged_vars)
 
 
 @pytest.fixture(scope="session")

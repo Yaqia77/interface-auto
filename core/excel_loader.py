@@ -49,11 +49,16 @@ class LoadResult:
 
 
 def load(path) -> LoadResult:
-    """加载用例文件；path 可为单个 .xlsx 文件或目录（目录下所有 .xlsx 合并，按文件名排序）。"""
+    """加载用例文件；path 可为单个 .xlsx 文件或目录（目录下所有 .xlsx 合并，按文件名排序）。
+
+    目录扫描会排除 secret_vars 开头的凭证文件（由 load_secret_vars 按配置单独加载）。
+    """
     p = Path(path)
     if p.is_dir():
         files = sorted(p.glob("*.xlsx"))
-        files = [f for f in files if not f.name.startswith("~$")]  # 排除 Excel 打开时的临时文件
+        files = [f for f in files
+                 if not f.name.startswith("~$")        # Excel 打开时的临时文件
+                 and not f.name.startswith("secret_vars")]  # 凭证文件走独立加载
         if not files:
             raise FileNotFoundError(f"目录 {p} 下没有 .xlsx 用例文件")
     else:
@@ -68,6 +73,28 @@ def load(path) -> LoadResult:
     if not cases:
         raise ExcelFormatError(f"未从 {len(files)} 个文件中解析到任何用例")
     return LoadResult(cases, variables)
+
+
+def load_secret_vars(path) -> dict:
+    """加载凭证变量文件（只需「全局变量」表，无「用例」表）。
+
+    文件不存在时返回空 dict（凭证文件是可选的）。
+    """
+    p = Path(path)
+    if not p.exists():
+        return {}
+    wb = load_workbook(p, data_only=True, read_only=True)
+    try:
+        if VAR_SHEET not in wb.sheetnames:
+            raise ExcelFormatError(f"[{p.name}] 凭证文件缺少工作表「{VAR_SHEET}」")
+        variables: dict = {}
+        errors: list[str] = []
+        _load_variables(p.name, wb[VAR_SHEET], variables, errors)
+        if errors:
+            raise ExcelFormatError(_join(errors))
+        return variables
+    finally:
+        wb.close()
 
 
 def _load_one(path: Path, cases: list, variables: dict) -> None:
