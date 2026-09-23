@@ -99,4 +99,5 @@ def executor(app_config):
         base_url=env.get("base_url", ""),
         default_headers=env.get("default_headers"),
         default_timeout=env.get("timeout", 15),
+        verify_ssl=env.get("verify_ssl", True),
     )
