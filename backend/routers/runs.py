@@ -1,6 +1,7 @@
 """执行批次接口：以子进程调用 main.py（零改写复用 pytest+报告编排），后台线程收集日志。"""
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -9,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 
 from backend.schemas import RunCreate, RunOut
 
@@ -145,3 +147,60 @@ def get_log(run_id: str):
         raise HTTPException(status_code=404, detail=f"批次不存在: {run_id}")
     return {"run_id": run_id, "status": _status_from(rec),
             "lines": len(rec["log"]), "log": "\n".join(rec["log"])}
+
+
+# 历史批次 id 形式：run_YYYYMMDD_HHMMSS 或 reports/run_YYYYMMDD_HHMMSS（列表接口返回的 cli 条目）
+_CLI_RUN_RE = re.compile(r"^(?:reports[/\\])?run_\d{8}_\d{6}$")
+
+
+def _resolve_report_dir(run_id: str) -> str | None:
+    """run_id -> 报告目录（相对项目根）。内存优先，其次认领 reports/ 历史目录。"""
+    rec = _runs.get(run_id)
+    if rec:
+        return rec["report_dir"]
+    if _CLI_RUN_RE.match(run_id):
+        return run_id if run_id.startswith("reports") else f"reports/{run_id}"
+    return None
+
+
+@router.get("/{run_id}/report", summary="批次报告（allure=中文单文件 / html=pytest-html）")
+def get_report(run_id: str, view: str = "allure"):
+    """直接返回 HTML，前端可 iframe 内嵌或 window.open。
+
+    allure 首次访问时现场生成（allure generate + allurerc.mjs 中文单文件），之后走已生成缓存。
+    """
+    rel = _resolve_report_dir(run_id)
+    if rel is None:
+        raise HTTPException(status_code=404, detail=f"批次不存在或报告目录未生成: {run_id}")
+    d = (ROOT / rel).resolve()
+    if d != ROOT and ROOT not in d.parents:
+        raise HTTPException(status_code=400, detail="非法报告路径")
+    if not d.is_dir():
+        raise HTTPException(status_code=404, detail=f"报告目录不存在: {rel}")
+
+    if view == "html":
+        p = d / "report.html"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="pytest-html 报告不存在（运行时可能用了 --no-html）")
+        return FileResponse(p, media_type="text/html")
+
+    results, out = d / "allure-results", d / "allure-report"
+    index = out / "index.html"
+    if not index.exists():
+        if not results.is_dir():
+            fallback = d / "report.html"
+            if fallback.exists():  # 无 allure 结果时退回 pytest-html，避免前端白屏
+                return FileResponse(fallback, media_type="text/html")
+            raise HTTPException(status_code=404, detail="allure-results 不存在，无法生成报告")
+        allure_cmd = shutil.which("allure")
+        if not allure_cmd:
+            raise HTTPException(status_code=501, detail="未找到 allure CLI（npm install -g allure）")
+        cfg = ROOT / "allurerc.mjs"
+        cmd = [allure_cmd, "generate", str(results), "--output", str(out)]
+        if cfg.exists():
+            cmd += ["--config", str(cfg)]
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=180, cwd=str(ROOT))
+        if proc.returncode != 0 or not index.exists():
+            raise HTTPException(status_code=500, detail=f"allure generate 失败: {(proc.stderr or proc.stdout)[-400:]}")
+    return FileResponse(index, media_type="text/html")

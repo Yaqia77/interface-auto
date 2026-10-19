@@ -44,6 +44,18 @@ def health():
     )
 
 
+@app.get("/api/envs", tags=["系统"], summary="可用环境列表（前端环境下拉）")
+def envs():
+    cfg = load_config()
+    return {
+        "default_env": cfg.get("default_env"),
+        "envs": [
+            {"name": name, "base_url": (section or {}).get("base_url")}
+            for name, section in (cfg.get("env") or {}).items()
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
 
