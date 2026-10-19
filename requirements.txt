@@ -6,3 +6,5 @@ allure-pytest>=2.13
 jsonpath-ng>=1.6
 PyYAML>=6.0
 loguru>=0.7
+fastapi>=0.110
+uvicorn[standard]>=0.29
