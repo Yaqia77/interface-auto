@@ -45,3 +45,31 @@ export interface EnvsResp {
   default_env: string | null;
   envs: EnvInfo[];
 }
+
+/** 批次用例结果摘要（/api/runs/{id}/cases，后端已掩码） */
+export interface RunCaseSummary {
+  case_id: string;
+  name: string;
+  priority: string;
+  status: "passed" | "failed" | "broken" | "skipped" | string;
+  duration_ms: number;
+  error: string;
+}
+
+export interface RunCasesResp {
+  run_id: string;
+  total: number;
+  stats: Record<string, number>;
+  items: RunCaseSummary[];
+}
+
+export interface RunCaseDetail {
+  case_id: string;
+  name: string;
+  status: string;
+  description: string;
+  error: string;
+  trace: string;
+  request: Record<string, unknown> | null;
+  response: Record<string, unknown> | null;
+}

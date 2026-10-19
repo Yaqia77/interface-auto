@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CasePage, EnvsResp, RunItem } from "../types";
+import type { CasePage, EnvsResp, RunCasesResp, RunCaseDetail, RunItem } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -43,6 +43,20 @@ export const api = {
     http
       .get<{ run_id: string; status: string; lines: number; log: string }>(
         `/runs/${encodeURIComponent(runId)}/log`
+      )
+      .then((r) => r.data),
+
+  /** 平台原生明细：批次用例结果摘要（已掩码） */
+  getRunCases: (runId: string) =>
+    http
+      .get<RunCasesResp>(`/runs/${encodeURIComponent(runId)}/cases`)
+      .then((r) => r.data),
+
+  /** 单用例请求/响应快照（已掩码+截断） */
+  getRunCaseDetail: (runId: string, caseId: string) =>
+    http
+      .get<RunCaseDetail>(
+        `/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}`
       )
       .then((r) => r.data),
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from backend import allure_store
 from backend.schemas import RunCreate, RunOut
 
 ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上溯两级）
@@ -114,7 +115,7 @@ def create_run(body: RunCreate):
 def list_runs(limit: int = 20):
     items: list[RunOut] = [_to_out(r) for r in _runs.values()]
 
-    # 扫描本地 CLI 历史运行目录，补全（status=unknown，source=cli）
+    # 扫描本地 CLI 历史运行目录，补全（source=cli；状态从 allure-results 推断）
     reports = ROOT / "reports"
     known = {r["report_dir"] for r in _runs.values() if r["report_dir"]}
     if reports.is_dir():
@@ -122,8 +123,10 @@ def list_runs(limit: int = 20):
             rel = _rel(str(d))
             if rel in known:
                 continue
-            ts = d.name.replace("run_", "").replace("_", " ")
-            items.append(RunOut(run_id=rel, status="unknown", source="cli",
+            ts = datetime.strptime(d.name[4:], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+            results = d / "allure-results"
+            status = allure_store.infer_status(results) if results.is_dir() else "unknown"
+            items.append(RunOut(run_id=rel, status=status, source="cli",
                                 started_at=ts, report_dir=rel))
             if len(items) >= limit:
                 break
@@ -204,3 +207,30 @@ def get_report(run_id: str, view: str = "allure"):
         if proc.returncode != 0 or not index.exists():
             raise HTTPException(status_code=500, detail=f"allure generate 失败: {(proc.stderr or proc.stdout)[-400:]}")
     return FileResponse(index, media_type="text/html")
+
+
+def _results_dir_or_404(run_id: str) -> Path:
+    """平台明细接口共用：定位批次的 allure-results 目录。"""
+    rel = _resolve_report_dir(run_id)
+    if rel is None:
+        raise HTTPException(status_code=404, detail=f"批次不存在或报告目录未生成: {run_id}")
+    d = (ROOT / rel).resolve()
+    if d != ROOT and ROOT not in d.parents:
+        raise HTTPException(status_code=400, detail="非法报告路径")
+    results = d / "allure-results"
+    if not results.is_dir():
+        raise HTTPException(status_code=404, detail="allure-results 不存在，无法提供明细")
+    return results
+
+
+@router.get("/{run_id}/cases", summary="批次用例结果摘要（平台原生报告页，已掩码）")
+def get_run_cases(run_id: str):
+    return {"run_id": run_id, **allure_store.list_cases(_results_dir_or_404(run_id))}
+
+
+@router.get("/{run_id}/cases/{case_id}", summary="单用例请求/响应明细（已掩码+截断）")
+def get_run_case(run_id: str, case_id: str):
+    detail = allure_store.case_detail(_results_dir_or_404(run_id), case_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail=f"批次 {run_id} 中不存在用例 {case_id}")
+    return detail

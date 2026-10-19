@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 执行中心：发起批次 → 轮询日志 → 查看/打开中文 Allure 报告。 */
 import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { EnvInfo, RunItem } from "../types";
@@ -19,6 +20,8 @@ const current = ref<RunItem | null>(null);
 const logText = ref("");
 const runs = ref<RunItem[]>([]);
 let timer: number | undefined;
+
+const router = useRouter();
 
 const statusType = (s: string) =>
   (({ running: "warning", passed: "success", failed: "danger", error: "danger", unknown: "info" } as Record<string, any>)[s] ?? "info");
@@ -77,10 +80,15 @@ function openReport(runId: string) {
   window.open(api.reportUrl(runId), "_blank");
 }
 
+function toReportPage(runId: string) {
+  // 站内报告页：平台原生明细（掩码后）+ Allure 内嵌
+  router.push({ path: "/report", query: { runId } });
+}
+
 function watchRun(run: RunItem) {
   if (run.source !== "api") {
-    // cli 历史批次没有内存日志，直接给报告入口
-    openReport(run.run_id);
+    // cli 历史批次没有内存日志，直接进站内报告页
+    toReportPage(run.run_id);
     return;
   }
   current.value = run;
@@ -139,9 +147,9 @@ onBeforeUnmount(stopPolling);
             type="primary"
             size="small"
             style="margin-top: 8px"
-            @click="openReport(current.run_id)"
+            @click="toReportPage(current.run_id)"
           >
-            📈 打开中文 Allure 报告
+            📊 查看批次报告
           </el-button>
         </el-card>
       </el-col>
@@ -165,19 +173,27 @@ onBeforeUnmount(stopPolling);
               <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
             </el-table-column>
             <el-table-column prop="started_at" label="开始时间" width="150" />
-            <el-table-column label="操作" width="180">
+            <el-table-column label="操作" width="230">
               <template #default="{ row }">
                 <el-button size="small" text type="primary" @click="watchRun(row)">
-                  {{ row.source === "api" ? "看日志" : "报告" }}
+                  {{ row.source === "api" ? "看日志" : "明细" }}
                 </el-button>
                 <el-button
                   v-if="row.source === 'api' && ['passed', 'failed'].includes(row.status)"
                   size="small"
                   text
                   type="primary"
+                  @click="toReportPage(row.run_id)"
+                >
+                  明细
+                </el-button>
+                <el-button
+                  v-if="row.report_dir"
+                  size="small"
+                  text
                   @click="openReport(row.run_id)"
                 >
-                  报告
+                  Allure
                 </el-button>
               </template>
             </el-table-column>
