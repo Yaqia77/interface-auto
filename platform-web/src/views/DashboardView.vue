@@ -1,0 +1,151 @@
+<script setup lang="ts">
+/** 工作台：用例资产与执行态势一屏概览（全部复用既有接口，纯前端聚合）。 */
+import { computed, onMounted, ref } from "vue";
+import { useRouter } from "vue-router";
+import { api } from "../api";
+import type { CaseItem, EnvInfo, RunItem } from "../types";
+
+const router = useRouter();
+const loading = ref(true);
+const cases = ref<CaseItem[]>([]);
+const runs = ref<RunItem[]>([]);
+const envs = ref<EnvInfo[]>([]);
+
+onMounted(async () => {
+  try {
+    const [c, r, e] = await Promise.all([
+      api.listCases({}),
+      api.listRuns(10),
+      api.listEnvs(),
+    ]);
+    cases.value = c.items;
+    runs.value = r;
+    envs.value = e.envs;
+  } finally {
+    loading.value = false;
+  }
+});
+
+const enabled = computed(() => cases.value.filter((c) => c.run).length);
+const modules = computed(() => new Set(cases.value.map((c) => c.module)).size);
+
+/** 优先级分布（P0~P5 固定序，方便条对齐） */
+const prioBars = computed(() => {
+  const order = ["P0", "P1", "P2", "P3", "P4", "P5"];
+  const max = Math.max(1, ...order.map((p) => cases.value.filter((c) => c.priority === p).length));
+  return order
+    .map((p) => {
+      const n = cases.value.filter((c) => c.priority === p).length;
+      return { p, n, pct: (n / max) * 100 };
+    })
+    .filter((b) => b.n > 0);
+});
+
+const prioColor: Record<string, string> = {
+  P0: "#f56c6c", P1: "#e6a23c", P2: "#409eff", P3: "#909399", P4: "#909399", P5: "#c0c4cc",
+};
+
+/** 最近一次已结束的批次（跳过 running，KPI 不被执行中批次污染） */
+const lastDone = computed(() =>
+  runs.value.find((r) => ["passed", "failed", "error", "cancelled"].includes(r.status)));
+
+const finishedStats = computed(() => {
+  const done = runs.value.filter((r) => r.status === "passed" || r.status === "failed");
+  const passed = done.filter((r) => r.status === "passed").length;
+  return { total: done.length, passed, rate: done.length ? Math.round((passed / done.length) * 100) : null };
+});
+
+const statusType = (s: string) =>
+  (({ running: "warning", passed: "success", failed: "danger", error: "danger", cancelled: "info" } as Record<string, any>)[s] ?? "info");
+
+function goReport(run: RunItem) {
+  if (run.source === "api" && ["passed", "failed"].includes(run.status)) router.push({ path: "/report", query: { runId: run.run_id } });
+  else if (run.report_dir) router.push({ path: "/report", query: { runId: run.run_id } });
+}
+</script>
+
+<template>
+  <div v-loading="loading">
+    <el-row :gutter="12">
+      <el-col :span="6">
+        <el-card shadow="never" class="kpi">
+          <div class="kpi-num">{{ cases.length }}</div>
+          <div class="kpi-label">用例总数（启用 {{ enabled }}）</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="never" class="kpi">
+          <div class="kpi-num">{{ modules }}</div>
+          <div class="kpi-label">模块数</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="never" class="kpi">
+          <div class="kpi-num" :style="{ color: lastDone?.status === 'passed' ? '#67c23a' : '#f56c6c' }">
+            {{ lastDone ? lastDone.status : "—" }}
+          </div>
+          <div class="kpi-label">最近批次{{ lastDone ? "（" + (lastDone.started_at ?? "") + "）" : "暂无记录" }}</div>
+        </el-card>
+      </el-col>
+      <el-col :span="6">
+        <el-card shadow="never" class="kpi">
+          <div class="kpi-num">{{ finishedStats.rate == null ? "—" : finishedStats.rate + "%" }}</div>
+          <div class="kpi-label">近 {{ finishedStats.total }} 次已完成批次通过率</div>
+        </el-card>
+      </el-col>
+    </el-row>
+
+    <el-row :gutter="12" style="margin-top: 12px">
+      <el-col :span="8">
+        <el-card shadow="never" header="优先级分布">
+          <div v-for="b in prioBars" :key="b.p" class="bar-row">
+            <span class="bar-label mono">{{ b.p }}</span>
+            <div class="bar-track"><div class="bar-fill" :style="{ width: b.pct + '%', background: prioColor[b.p] }" /></div>
+            <span class="bar-num">{{ b.n }}</span>
+          </div>
+          <div style="margin-top: 10px; color: #909399; font-size: 12px">
+            环境：
+            <el-tag v-for="e in envs" :key="e.name" size="small" style="margin-right: 6px">{{ e.name }}</el-tag>
+          </div>
+        </el-card>
+      </el-col>
+      <el-col :span="16">
+        <el-card shadow="never">
+          <template #header>
+            最近批次
+            <el-button size="small" style="float: right" @click="router.push('/execution')">去执行中心</el-button>
+          </template>
+          <el-table :data="runs.slice(0, 8)" size="small" row-key="run_id">
+            <el-table-column label="批次" min-width="200">
+              <template #default="{ row }"><span class="mono">{{ row.run_id }}</span></template>
+            </el-table-column>
+            <el-table-column label="来源" width="70">
+              <template #default="{ row }"><el-tag size="small" :type="row.source === 'api' ? 'primary' : 'info'">{{ row.source }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
+            </el-table-column>
+            <el-table-column prop="started_at" label="开始时间" width="150" />
+            <el-table-column label="操作" width="80">
+              <template #default="{ row }">
+                <el-button size="small" text type="primary" :disabled="!row.report_dir" @click="goReport(row)">报告</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </el-card>
+      </el-col>
+    </el-row>
+  </div>
+</template>
+
+<style scoped>
+.kpi { text-align: center; }
+.kpi-num { font-size: 30px; font-weight: 700; line-height: 1.3; }
+.kpi-label { color: #909399; font-size: 12px; margin-top: 2px; }
+.mono { font-family: Consolas, Monaco, monospace; font-size: 12px; }
+.bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.bar-label { width: 26px; }
+.bar-track { flex: 1; height: 12px; background: #f0f2f5; border-radius: 6px; overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }
+.bar-num { width: 26px; text-align: right; font-size: 12px; color: #606266; }
+</style>

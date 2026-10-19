@@ -3,7 +3,13 @@ import { createRouter, createWebHistory } from "vue-router";
 const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", redirect: "/cases" },
+    { path: "/", redirect: "/dashboard" },
+    {
+      path: "/dashboard",
+      name: "dashboard",
+      component: () => import("../views/DashboardView.vue"),
+      meta: { title: "工作台" },
+    },
     {
       path: "/cases",
       name: "cases",

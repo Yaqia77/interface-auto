@@ -29,10 +29,11 @@ onMounted(async () => {
     <el-aside width="220px" class="side">
       <div class="logo">● Interface Auto 平台</div>
       <el-menu router :default-active="activeMenu" class="side-menu">
+        <el-menu-item index="/dashboard">🏠 工作台</el-menu-item>
         <el-menu-item index="/cases">📋 用例管理</el-menu-item>
         <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
       </el-menu>
-      <div class="side-foot">P1 骨架 · 对接 FastAPI 后端</div>
+      <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>
     </el-aside>
     <el-container>
       <el-header class="topbar">
