@@ -21,7 +21,7 @@ const router = createRouter({
       path: "/report",
       name: "report",
       component: () => import("../views/ReportView.vue"),
-      meta: { title: "批次报告" },
+      meta: { title: "批次报告", active: "/execution" },
     },
   ],
 });
