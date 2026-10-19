@@ -48,6 +48,25 @@ class CaseUpdate(BaseModel):
     timeout: float | None = Field(default=None, description="秒，正数；传 null 清空用 exclude 控制")
 
 
+class CaseCreate(BaseModel):
+    """新增用例（整行写入 Excel 末行；编号唯一）。"""
+
+    case_id: str = Field(description="用例编号（唯一，写回定位的行锁锚点）")
+    api_name: str = Field(description="接口名称（必填）")
+    url: str = Field(description="请求路径（必填）")
+    method: str = Field(description="GET/POST/PUT/DELETE/PATCH")
+    asserts: list | None = Field(default=None, description="[[操作符, 取值路径, 期望值], ...]，至少一条")
+    module: str = "未分类"
+    case_desc: str = "新建用例"
+    priority: str = Field(default="P2", description="P0~P5")
+    run: bool = Field(default=True, description="是否执行（写回 Y/N）")
+    headers: dict | None = None
+    params: dict | None = None
+    body: Any = None
+    extract: dict | None = None
+    timeout: float | None = None
+
+
 class RunCreate(BaseModel):
     """发起一次执行批次。"""
 

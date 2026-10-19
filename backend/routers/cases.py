@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend import excel_writer
 from backend.excel_writer import CaseWriteError
-from backend.schemas import CaseOut, CasePage, CaseUpdate
+from backend.schemas import CaseCreate, CaseOut, CasePage, CaseUpdate
 from core import excel_loader
 from core.excel_loader import ExcelFormatError
 
@@ -152,6 +152,40 @@ def get_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
 
 
 _ERROR_STATUS = {"invalid": 400, "not_found": 404, "conflict": 409, "locked": 409}
+
+
+@router.post("", response_model=CaseOut, summary="新增用例（追加行写回 Excel）", status_code=201)
+def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx")):
+    path = _resolve_file(file)
+    if path.is_dir():
+        raise HTTPException(status_code=400, detail="目录模式下无法确定新增目标文件，请指定具体 xlsx")
+    data = body.model_dump()
+    try:
+        excel_writer.append_case(path, data)
+    except CaseWriteError as e:
+        raise HTTPException(status_code=_ERROR_STATUS[e.kind], detail=str(e))
+    fresh = next((c for c in _load_cached(path).cases if c.case_id == body.case_id), None)
+    if fresh is None:
+        raise HTTPException(status_code=500, detail="新增后未能重新读到用例")
+    return CaseOut(**asdict(fresh))
+
+
+@router.delete("/{case_id}", summary="删除用例（Excel 整行删除，校验通过才落盘）")
+def delete_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
+    path = _resolve_file(file)
+    try:
+        result = _load_cached(path)
+    except ExcelFormatError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    target = next((c for c in result.cases if c.case_id == case_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"用例不存在: {case_id}")
+    target_file = (path / target.source) if path.is_dir() else path
+    try:
+        excel_writer.delete_case(target_file, case_id, target.row)
+    except CaseWriteError as e:
+        raise HTTPException(status_code=_ERROR_STATUS[e.kind], detail=str(e))
+    return {"deleted": case_id, "file": target_file.name}
 
 
 @router.put("/{case_id}", response_model=CaseOut, summary="更新用例（写回 Excel，校验通过才落盘）")

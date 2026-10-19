@@ -1,5 +1,5 @@
 <script setup lang="ts">
-/** 用例管理：筛选 + 表格 + 行展开 + 编辑抽屉（下拉候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
+/** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
@@ -52,9 +52,11 @@ interface AssertRow { op: string; path: string; expected: string }
 
 const editVisible = ref(false);
 const saving = ref(false);
-const editing = ref<CaseItem | null>(null);   // 打开时的原始行（差分基准）
+const editing = ref<CaseItem | null>(null);   // 打开时的原始行（差分基准；新增模式为 null）
+const mode = ref<"edit" | "create">("edit");
 
 const form = reactive({
+  case_id: "",
   module: "",
   api_name: "",
   case_desc: "",
@@ -163,8 +165,10 @@ function insertVar(v: string) {
 const jsonText = (v: unknown) => (v == null ? "" : JSON.stringify(v, null, 2));
 
 function openEdit(row: CaseItem) {
+  mode.value = "edit";
   editing.value = row;
   Object.assign(form, {
+    case_id: row.case_id,
     module: row.module,
     api_name: row.api_name,
     case_desc: row.case_desc,
@@ -180,6 +184,60 @@ function openEdit(row: CaseItem) {
   extRows.value = objToRows(row.extract);
   asrtRows.value = assertsToRows(row.asserts);
   editVisible.value = true;
+}
+
+/** 新增：预置一条最常见的基础断言与默认值，请求配置类字段留空引导填写 */
+function openCreate() {
+  mode.value = "create";
+  editing.value = null;
+  Object.assign(form, {
+    case_id: "", module: "", api_name: "", case_desc: "", priority: "P2", run: true,
+    method: "GET", url: "", timeout: "", body: "",
+  });
+  hdrRows.value = [];
+  prmRows.value = [];
+  extRows.value = [];
+  asrtRows.value = [{ op: "eq", path: "status_code", expected: "200" }];
+  editVisible.value = true;
+}
+
+/** 采集当前抽屉表单为完整用例对象（新增用）；校验失败返回 null */
+function collectAll(): Record<string, unknown> | null {
+  const cid = form.case_id.trim();
+  if (!cid) { ElMessage.error("用例编号不能为空"); return null; }
+  const out: Record<string, unknown> = {};
+  for (const key of ["module", "api_name", "priority", "method", "url"] as const) {
+    const v = String(form[key]).trim();
+    if (!v) { ElMessage.error(`「${key}」不能为空`); return null; }
+    out[key] = v;
+  }
+  out.case_id = cid;
+  out.case_desc = form.case_desc.trim() || "新建用例";
+  out.run = form.run;
+  const to = form.timeout.trim();
+  if (to) {
+    if (!(Number.isFinite(Number(to)) && Number(to) > 0)) { ElMessage.error("超时必须为正数（秒）"); return null; }
+    out.timeout = Number(to);
+  }
+  if (form.body.trim()) {
+    try { out.body = JSON.parse(form.body); }
+    catch { ElMessage.error("「请求体」不是合法 JSON，请检查"); return null; }
+  }
+  const kvSpec: Array<[KvRow[], string, string]> = [
+    [hdrRows.value, "headers", "请求头"],
+    [prmRows.value, "params", "查询参数"],
+    [extRows.value, "extract", "变量提取"],
+  ];
+  for (const [rows, field, label] of kvSpec) {
+    const obj = rowsToObj(rows, label);
+    if (obj === null) return null;
+    out[field] = Object.keys(obj).length ? obj : null;
+  }
+  const asserts = rowsToAsserts();
+  if (asserts === null) return null;
+  if (asserts.length === 0) { ElMessage.error("至少保留一条断言"); return null; }
+  out.asserts = asserts;
+  return out;
 }
 
 /** 只提交与原始行不同的字段（后端 exclude_unset 语义） */
@@ -238,20 +296,36 @@ function buildChanges(): Record<string, unknown> | null {
 }
 
 async function saveEdit() {
-  const changes = buildChanges();
-  if (!changes || !editing.value) return;
   saving.value = true;
   try {
-    await api.updateCase(editing.value.case_id, changes);
-    ElMessage.success(`已写回 Excel：${Object.keys(changes).join(", ")}`);
+    if (mode.value === "create") {
+      const data = collectAll();
+      if (!data) return;
+      await api.createCase(data);
+      ElMessage.success(`已新增并写回 Excel：${data.case_id}`);
+    } else {
+      const changes = buildChanges();
+      if (!changes || !editing.value) return;
+      await api.updateCase(editing.value.case_id, changes);
+      ElMessage.success(`已写回 Excel：${Object.keys(changes).join(", ")}`);
+    }
     editVisible.value = false;
     await search();
     meta.value = await api.getCaseMeta();  // 模块/请求头候选可能因本次改动而新增
   } catch {
-    /* 拦截器已提示后端 detail（400 逐行定位 / 409 占用与行锁） */
+    /* 拦截器已提示后端 detail（400 逐行定位 / 409 占用、重号与行锁） */
   } finally {
     saving.value = false;
   }
+}
+
+async function removeCase(row: CaseItem) {
+  try {
+    await api.deleteCase(row.case_id);
+    ElMessage.success(`已删除并写回 ${row.source}：${row.case_id}`);
+    await search();
+    meta.value = await api.getCaseMeta();
+  } catch { /* 拦截器已提示 */ }
 }
 
 onMounted(async () => {
@@ -281,6 +355,7 @@ onMounted(async () => {
         <el-form-item>
           <el-button type="primary" @click="search">查询</el-button>
           <el-button @click="reset">重置</el-button>
+          <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
         </el-form-item>
       </el-form>
     </el-card>
@@ -332,9 +407,14 @@ onMounted(async () => {
             <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="80">
+        <el-table-column label="操作" width="130">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
+              <template #reference>
+                <el-button size="small" text type="danger">删除</el-button>
+              </template>
+            </el-popconfirm>
           </template>
         </el-table-column>
       </el-table>
@@ -344,9 +424,13 @@ onMounted(async () => {
     </el-card>
 
     <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
-    <el-drawer v-model="editVisible" size="52%" :title="`编辑用例 ${editing?.case_id ?? ''}`">
+    <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? '新增用例' : `编辑用例 ${editing?.case_id ?? ''}`">
       <el-form label-width="90px" @submit.prevent>
         <el-divider content-position="left">基本信息</el-divider>
+        <el-form-item label="用例编号">
+          <el-input v-model="form.case_id" :disabled="mode === 'edit'" class="mono"
+                    placeholder="唯一编号，如 album_list_002（创建后不可改）" />
+        </el-form-item>
         <el-form-item label="模块">
           <el-select v-model="form.module" filterable allow-create default-first-option placeholder="选择或输入新模块" style="width: 100%">
             <el-option v-for="m in meta?.modules ?? []" :key="m" :label="m" :value="m" />
@@ -435,10 +519,11 @@ onMounted(async () => {
         <el-button size="small" @click="asrtRows.push({ op: 'eq', path: '', expected: '' })">＋ 添加断言</el-button>
 
         <div class="hint" style="margin: 14px 0 10px">
-          保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端跑全文件格式校验，不通过不落盘。
+          <template v-if="mode === 'create'">保存后追加为 data/api_cases.xlsx 末行；后端跑全文件格式校验，不通过不落盘。</template>
+          <template v-else>保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端跑全文件格式校验，不通过不落盘。</template>
         </div>
         <el-button @click="editVisible = false">取消</el-button>
-        <el-button type="primary" :loading="saving" @click="saveEdit">保存并写回 Excel</el-button>
+        <el-button type="primary" :loading="saving" @click="saveEdit">{{ mode === "create" ? "新增并写回 Excel" : "保存并写回 Excel" }}</el-button>
       </el-form>
     </el-drawer>
   </div>

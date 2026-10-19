@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CasePage, CaseMeta, EnvsResp, RunCasesResp, RunCaseDetail, RunItem } from "../types";
+import type { CaseItem, CasePage, CaseMeta, EnvsResp, RunCasesResp, RunCaseDetail, RunItem } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -29,6 +29,18 @@ export const api = {
   updateCase: (caseId: string, changes: Record<string, unknown>) =>
     http
       .put<CaseItem>(`/cases/${encodeURIComponent(caseId)}`, changes)
+      .then((r) => r.data),
+
+  /** 新增用例（整行追加写回 Excel 末行，编号唯一） */
+  createCase: (data: Record<string, unknown>) =>
+    http.post<CaseItem>("/cases", data).then((r) => r.data),
+
+  /** 删除用例（Excel 整行删除） */
+  deleteCase: (caseId: string) =>
+    http
+      .delete<{ deleted: string; file: string }>(
+        `/cases/${encodeURIComponent(caseId)}`
+      )
       .then((r) => r.data),
 
   /** 编辑用元数据：优先级/模块/请求头/断言操作符/变量候选 */
