@@ -38,7 +38,7 @@ def _serialize(field: str, value):
     if field == "priority":
         v = str(value or "").strip().upper()
         if v not in excel_loader.VALID_PRIORITIES:
-            raise CaseWriteError("invalid", f"优先级必须是 P0~P3，实际为 {v!r}")
+            raise CaseWriteError("invalid", f"优先级必须是 {'/'.join(sorted(excel_loader.VALID_PRIORITIES))}，实际为 {v!r}")
         return v
     if field == "method":
         v = str(value or "").strip().upper()

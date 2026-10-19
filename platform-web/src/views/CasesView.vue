@@ -1,13 +1,14 @@
 <script setup lang="ts">
-/** 用例管理：筛选 + 表格 + 行展开 + 编辑抽屉（改动直写回存量 Excel）。 */
+/** 用例管理：筛选 + 表格 + 行展开 + 编辑抽屉（下拉候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
 import { onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { CaseItem } from "../types";
+import type { CaseItem, CaseMeta } from "../types";
 
 const loading = ref(false);
 const cases = ref<CaseItem[]>([]);
 const total = ref(0);
+const meta = ref<CaseMeta | null>(null);
 const filters = reactive({
   module: "",
   priority: [] as string[],
@@ -40,15 +41,19 @@ function reset() {
 }
 
 const prioType = (p: string) =>
-  ({ P0: "danger", P1: "warning", P2: "info", P3: "info" }[p] ?? "info");
+  ({ P0: "danger", P1: "warning", P2: "info", P3: "info", P4: "info", P5: "info" }[p] ?? "info");
 
 const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 
-/* ---------- 编辑抽屉 ---------- */
+/* ================= 编辑抽屉 ================= */
+
+interface KvRow { key: string; value: string }
+interface AssertRow { op: string; path: string; expected: string }
 
 const editVisible = ref(false);
 const saving = ref(false);
 const editing = ref<CaseItem | null>(null);   // 打开时的原始行（差分基准）
+
 const form = reactive({
   module: "",
   api_name: "",
@@ -58,26 +63,102 @@ const form = reactive({
   method: "POST",
   url: "",
   timeout: "",
-  headers: "",
-  params: "",
   body: "",
-  extract: "",
-  asserts: "",
 });
 
-const jsonFields = ["headers", "params", "body", "extract", "asserts"] as const;
+const hdrRows = ref<KvRow[]>([]);
+const prmRows = ref<KvRow[]>([]);
+const extRows = ref<KvRow[]>([]);
+const asrtRows = ref<AssertRow[]>([]);
 
-/** JSON 文本 → 单元格值：空文本=null，非法时报错 */
-function parseJsonField(name: string, text: string): { ok: boolean; value?: unknown } {
-  const t = text.trim();
-  if (!t) return { ok: true, value: null };
-  try {
-    return { ok: true, value: JSON.parse(t) };
-  } catch {
-    ElMessage.error(`「${name}」不是合法 JSON，请检查`);
-    return { ok: false };
+// 字面量含 {{ }}，定义为常量避免写进模板插值
+const VAR_PH = "值，支持 {{变量}} 引用";
+const PATH_PH = "status_code / response_text / $.data.code";
+const varChip = (v: string) => "{{" + v + "}}";
+
+const prioOptions = () => meta.value?.priorities ?? ["P0", "P1", "P2", "P3", "P4", "P5"];
+const methodOptions = () => meta.value?.methods ?? ["GET", "POST", "PUT", "DELETE", "PATCH"];
+
+/* ---------- 行数据 ⇄ JSON 值 转换 ---------- */
+
+const objToRows = (o: Record<string, unknown> | null): KvRow[] =>
+  Object.entries(o ?? {}).map(([key, value]) => ({ key, value: String(value ?? "") }));
+
+const rowsToObj = (rows: KvRow[], label: string): Record<string, string> | null => {
+  const out: Record<string, string> = {};
+  for (const r of rows) {
+    const k = r.key.trim();
+    if (!k) continue;
+    if (k in out) { ElMessage.error(`${label}存在重复的键：${k}`); return null; }
+    out[k] = r.value;
   }
+  return out;
+};
+
+/** 期望值字符串 → 单元格 JSON 值（轻量推断数字/布尔，其余按字符串；断言引擎自带跨类型比较） */
+const parseExpected = (s: string): unknown => {
+  const t = s.trim();
+  if (/^-?\d+(\.\d+)?$/.test(t)) return Number(t);
+  if (t === "true") return true;
+  if (t === "false") return false;
+  return t;
+};
+
+const stringifyExpected = (v: unknown): string => (v == null ? "" : String(v));
+
+const assertsToRows = (arr: unknown): AssertRow[] =>
+  (Array.isArray(arr) ? arr : []).map((a) => {
+    const r = Array.isArray(a) ? a : [];
+    return { op: String(r[0] ?? ""), path: String(r[1] ?? ""), expected: stringifyExpected(r[2]) };
+  });
+
+const opNeedExpected = (op: string): boolean => {
+  const info = meta.value?.assert_ops.find((o) => o.op === op);
+  return info ? info.need_expected : true;
+};
+
+const rowsToAsserts = (): (string | unknown)[][] | null => {
+  const out: (string | unknown)[][] = [];
+  for (const [i, r] of asrtRows.value.entries()) {
+    if (!r.op) { ElMessage.error(`第 ${i + 1} 条断言缺少操作符`); return null; }
+    if (!r.path.trim()) { ElMessage.error(`第 ${i + 1} 条断言缺少取值路径`); return null; }
+    out.push(opNeedExpected(r.op) ? [r.op, r.path.trim(), parseExpected(r.expected)] : [r.op, r.path.trim()]);
+  }
+  return out;
+};
+
+/** 空对象/空数组与 null 视为等价，避免格式差异造成伪改动 */
+const normVal = (v: unknown): string => {
+  if (v == null) return "null";
+  if (typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0) return "null";
+  if (Array.isArray(v) && v.length === 0) return "null";
+  return JSON.stringify(v);
+};
+const normAsserts = (arr: unknown): string => {
+  const list = Array.isArray(arr) ? arr : [];
+  return JSON.stringify(list.map((a) => {
+    const r = Array.isArray(a) ? a : [];
+    return r.length >= 3 ? [String(r[0]).toLowerCase(), String(r[1]), r[2]] : [String(r[0]).toLowerCase(), String(r[1])];
+  }));
+};
+
+/* ---------- 请求头：key 选中候选时自动填充建议值 ---------- */
+
+const hdrFocus = ref(0);
+
+function onHdrKey(val: string, row: KvRow) {
+  const hit = meta.value?.header_suggest.find((o) => o.key === val);
+  if (hit && !row.value) row.value = hit.value;
 }
+
+function insertVar(v: string) {
+  let idx = hdrFocus.value;
+  if (!hdrRows.value.length) hdrRows.value.push({ key: "", value: "" });
+  idx = Math.min(Math.max(idx, 0), hdrRows.value.length - 1);
+  hdrRows.value[idx].value += varChip(v);
+}
+
+/* ---------- 打开 / 保存 ---------- */
 
 const jsonText = (v: unknown) => (v == null ? "" : JSON.stringify(v, null, 2));
 
@@ -92,12 +173,12 @@ function openEdit(row: CaseItem) {
     method: row.method,
     url: row.url,
     timeout: row.timeout == null ? "" : String(row.timeout),
-    headers: jsonText(row.headers),
-    params: jsonText(row.params),
     body: jsonText(row.body),
-    extract: jsonText(row.extract),
-    asserts: jsonText(row.asserts),
   });
+  hdrRows.value = objToRows(row.headers);
+  prmRows.value = objToRows(row.params);
+  extRows.value = objToRows(row.extract);
+  asrtRows.value = assertsToRows(row.asserts);
   editVisible.value = true;
 }
 
@@ -105,16 +186,18 @@ function openEdit(row: CaseItem) {
 function buildChanges(): Record<string, unknown> | null {
   const row = editing.value!;
   const changes: Record<string, unknown> = {};
-  const plain: Array<[keyof typeof form, string]> = [
+
+  const plain: Array<["module" | "api_name" | "case_desc" | "priority" | "method" | "url", string]> = [
     ["module", row.module], ["api_name", row.api_name], ["case_desc", row.case_desc],
     ["priority", row.priority], ["method", row.method], ["url", row.url],
   ];
   for (const [key, orig] of plain) {
     const v = String(form[key]).trim();
     if (!v) { ElMessage.error(`「${key}」不能为空`); return null; }
-    if (v !== orig) (changes as Record<string, unknown>)[key] = v;
+    if (v !== orig) changes[key] = v;
   }
   if (form.run !== row.run) changes.run = form.run;
+
   const to = form.timeout.trim();
   const origTo = row.timeout == null ? "" : String(row.timeout);
   if (to !== origTo) {
@@ -123,14 +206,33 @@ function buildChanges(): Record<string, unknown> | null {
       ElMessage.error("超时必须为正数（秒）"); return null;
     } else changes.timeout = Number(to);
   }
-  const nameMap: Record<string, string> = { headers: "请求头", params: "查询参数", body: "请求体", extract: "变量提取", asserts: "断言" };
-  for (const f of jsonFields) {
-    const parsed = parseJsonField(nameMap[f], form[f] as string);
-    if (!parsed.ok) return null;
-    // 语义比较：parse 原始值与新值后规范化，避免格式差异造成伪改动
-    const norm = (v: unknown) => JSON.stringify(v ?? null);
-    if (norm(parsed.value) !== norm(row[f])) (changes as Record<string, unknown>)[f] = parsed.value;
+
+  // JSON 文本域：body
+  let bodyVal: unknown = null;
+  if (form.body.trim()) {
+    try { bodyVal = JSON.parse(form.body); }
+    catch { ElMessage.error("「请求体」不是合法 JSON，请检查"); return null; }
   }
+  if (normVal(bodyVal) !== normVal(row.body)) changes.body = bodyVal;
+
+  // kv 行编辑器
+  const kvSpec: Array<[KvRow[], Record<string, unknown> | null, string, string]> = [
+    [hdrRows.value, row.headers, "headers", "请求头"],
+    [prmRows.value, row.params, "params", "查询参数"],
+    [extRows.value, row.extract, "extract", "变量提取"],
+  ];
+  for (const [rows, orig, field, label] of kvSpec) {
+    const obj = rowsToObj(rows, label);
+    if (obj === null) return null;
+    if (normVal(obj) !== normVal(orig)) changes[field] = obj;
+  }
+
+  // 断言构建器（Excel 断言列不允许为空）
+  const asserts = rowsToAsserts();
+  if (asserts === null) return null;
+  if (asserts.length === 0) { ElMessage.error("至少保留一条断言"); return null; }
+  if (normAsserts(asserts) !== normAsserts(row.asserts)) changes.asserts = asserts;
+
   if (Object.keys(changes).length === 0) { ElMessage.info("没有需要保存的改动"); return null; }
   return changes;
 }
@@ -144,6 +246,7 @@ async function saveEdit() {
     ElMessage.success(`已写回 Excel：${Object.keys(changes).join(", ")}`);
     editVisible.value = false;
     await search();
+    meta.value = await api.getCaseMeta();  // 模块/请求头候选可能因本次改动而新增
   } catch {
     /* 拦截器已提示后端 detail（400 逐行定位 / 409 占用与行锁） */
   } finally {
@@ -151,7 +254,10 @@ async function saveEdit() {
   }
 }
 
-onMounted(search);
+onMounted(async () => {
+  search();
+  try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
+});
 </script>
 
 <template>
@@ -162,8 +268,8 @@ onMounted(search);
           <el-input v-model="filters.module" placeholder="包含匹配" clearable style="width: 140px" />
         </el-form-item>
         <el-form-item label="优先级">
-          <el-select v-model="filters.priority" multiple collapse-tags placeholder="全部" style="width: 160px">
-            <el-option v-for="p in ['P0', 'P1', 'P2', 'P3']" :key="p" :label="p" :value="p" />
+          <el-select v-model="filters.priority" multiple collapse-tags placeholder="全部" style="width: 180px">
+            <el-option v-for="p in prioOptions()" :key="p" :label="p" :value="p" />
           </el-select>
         </el-form-item>
         <el-form-item label="关键字">
@@ -237,12 +343,14 @@ onMounted(search);
       </div>
     </el-card>
 
-    <!-- 编辑抽屉：保存时只提交与当前值不同的字段 -->
-    <el-drawer v-model="editVisible" size="46%" :title="`编辑用例 ${editing?.case_id ?? ''}`">
+    <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
+    <el-drawer v-model="editVisible" size="52%" :title="`编辑用例 ${editing?.case_id ?? ''}`">
       <el-form label-width="90px" @submit.prevent>
         <el-divider content-position="left">基本信息</el-divider>
         <el-form-item label="模块">
-          <el-input v-model="form.module" />
+          <el-select v-model="form.module" filterable allow-create default-first-option placeholder="选择或输入新模块" style="width: 100%">
+            <el-option v-for="m in meta?.modules ?? []" :key="m" :label="m" :value="m" />
+          </el-select>
         </el-form-item>
         <el-form-item label="接口名称">
           <el-input v-model="form.api_name" />
@@ -254,14 +362,14 @@ onMounted(search);
           <el-col :span="8">
             <el-form-item label="优先级">
               <el-select v-model="form.priority" style="width: 100%">
-                <el-option v-for="p in ['P0', 'P1', 'P2', 'P3']" :key="p" :label="p" :value="p" />
+                <el-option v-for="p in prioOptions()" :key="p" :label="p" :value="p" />
               </el-select>
             </el-form-item>
           </el-col>
           <el-col :span="8">
             <el-form-item label="方法">
               <el-select v-model="form.method" style="width: 100%">
-                <el-option v-for="m in ['GET', 'POST', 'PUT', 'DELETE', 'PATCH']" :key="m" :label="m" :value="m" />
+                <el-option v-for="m in methodOptions()" :key="m" :label="m" :value="m" />
               </el-select>
             </el-form-item>
           </el-col>
@@ -278,13 +386,56 @@ onMounted(search);
           <el-input v-model="form.url" class="mono" />
         </el-form-item>
 
-        <el-divider content-position="left">请求配置（JSON，留空=清除）</el-divider>
-        <el-form-item v-for="f in jsonFields" :key="f" :label="{ headers: '请求头', params: '查询参数', body: '请求体', extract: '变量提取', asserts: '断言' }[f]">
-          <el-input v-model="form[f]" type="textarea" :rows="f === 'asserts' ? 6 : 4" class="mono" spellcheck="false" />
-        </el-form-item>
+        <el-divider content-position="left">请求头</el-divider>
+        <div class="hint">常用 Header 从下拉选择并自动带出建议值；不在列表中的可直接输入新名称。点击变量标签可在聚焦的值框中插入引用。</div>
+        <div v-for="(h, i) in hdrRows" :key="'h' + i" class="kv-row">
+          <el-select v-model="h.key" filterable allow-create default-first-option placeholder="Header 名" style="width: 190px" @change="(v: string) => onHdrKey(v, h)">
+            <el-option v-for="o in meta?.header_suggest ?? []" :key="o.key" :value="o.key" :label="o.key">
+              <span class="opt-key">{{ o.key }}</span>
+              <span class="opt-val">{{ o.value }}{{ o.used ? `（${o.used} 条在用）` : "（内置建议）" }}</span>
+            </el-option>
+          </el-select>
+          <el-input v-model="h.value" :placeholder="VAR_PH" class="mono" style="flex: 1" @focus="hdrFocus = i" />
+          <el-button text type="danger" @click="hdrRows.splice(i, 1)">✕</el-button>
+        </div>
+        <el-button size="small" @click="hdrRows.push({ key: '', value: '' })">＋ 添加请求头</el-button>
+        <div v-if="meta?.variables?.length" class="var-chips">
+          <el-tag v-for="v in meta.variables" :key="v" size="small" class="var-chip" @click="insertVar(v)">{{ varChip(v) }}</el-tag>
+        </div>
 
-        <div style="color: #909399; font-size: 12px; margin-bottom: 10px">
-          保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端会跑全文件格式校验，不通过不落盘
+        <el-divider content-position="left">查询参数</el-divider>
+        <div v-for="(p, i) in prmRows" :key="'p' + i" class="kv-row">
+          <el-input v-model="p.key" placeholder="参数名" class="mono" style="width: 190px" />
+          <el-input v-model="p.value" :placeholder="VAR_PH" class="mono" style="flex: 1" />
+          <el-button text type="danger" @click="prmRows.splice(i, 1)">✕</el-button>
+        </div>
+        <el-button size="small" @click="prmRows.push({ key: '', value: '' })">＋ 添加参数</el-button>
+
+        <el-divider content-position="left">请求体（JSON，留空=清除）</el-divider>
+        <el-input v-model="form.body" type="textarea" :rows="5" class="mono" spellcheck="false" />
+
+        <el-divider content-position="left">变量提取</el-divider>
+        <div class="hint">变量名 ← 响应 JSONPath，供后续用例 {{ varChip("变量名") }} 引用。</div>
+        <div v-for="(x, i) in extRows" :key="'x' + i" class="kv-row">
+          <el-input v-model="x.key" placeholder="变量名" class="mono" style="width: 190px" />
+          <el-input v-model="x.value" :placeholder="PATH_PH" class="mono" style="flex: 1" />
+          <el-button text type="danger" @click="extRows.splice(i, 1)">✕</el-button>
+        </div>
+        <el-button size="small" @click="extRows.push({ key: '', value: '' })">＋ 添加提取</el-button>
+
+        <el-divider content-position="left">断言（至少一条）</el-divider>
+        <div v-for="(a, i) in asrtRows" :key="'a' + i" class="kv-row">
+          <el-select v-model="a.op" placeholder="操作符" style="width: 170px">
+            <el-option v-for="o in meta?.assert_ops ?? []" :key="o.op" :value="o.op" :label="`${o.op} ${o.desc}`" />
+          </el-select>
+          <el-input v-model="a.path" :placeholder="PATH_PH" class="mono" style="flex: 1" />
+          <el-input v-if="opNeedExpected(a.op)" v-model="a.expected" placeholder="期望值" class="mono" style="width: 170px" />
+          <el-button text type="danger" @click="asrtRows.splice(i, 1)">✕</el-button>
+        </div>
+        <el-button size="small" @click="asrtRows.push({ op: 'eq', path: '', expected: '' })">＋ 添加断言</el-button>
+
+        <div class="hint" style="margin: 14px 0 10px">
+          保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端跑全文件格式校验，不通过不落盘。
         </div>
         <el-button @click="editVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="saveEdit">保存并写回 Excel</el-button>
@@ -296,4 +447,10 @@ onMounted(search);
 <style scoped>
 .mono { font-family: Consolas, Monaco, monospace; font-size: 12px; }
 .json { margin: 0; font-family: Consolas, Monaco, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.kv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.hint { color: #909399; font-size: 12px; margin-bottom: 8px; }
+.opt-key { float: left; }
+.opt-val { float: right; color: #a0a4a8; font-size: 12px; margin-left: 16px; }
+.var-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+.var-chip { cursor: pointer; font-family: Consolas, Monaco, monospace; }
 </style>

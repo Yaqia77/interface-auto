@@ -46,6 +46,28 @@ export interface EnvsResp {
   envs: EnvInfo[];
 }
 
+/** 编辑用元数据（/api/cases/meta）：下拉候选统一来源 */
+export interface AssertOpInfo {
+  op: string;
+  desc: string;
+  need_expected: boolean;
+}
+
+export interface HeaderSuggest {
+  key: string;
+  value: string;
+  used: number;
+}
+
+export interface CaseMeta {
+  priorities: string[];
+  methods: string[];
+  assert_ops: AssertOpInfo[];
+  modules: string[];
+  header_suggest: HeaderSuggest[];
+  variables: string[];
+}
+
 /** 批次用例结果摘要（/api/runs/{id}/cases，后端已掩码） */
 export interface RunCaseSummary {
   case_id: string;

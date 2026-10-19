@@ -1,4 +1,5 @@
 """用例查询与写回接口：读取复用 core.excel_loader，更新走 backend.excel_writer（校验后原子落盘）。"""
+from collections import Counter
 from dataclasses import asdict
 from pathlib import Path
 
@@ -72,6 +73,56 @@ def list_cases(
         raise HTTPException(status_code=400, detail=str(e))
     cases = _filtered(result.cases, module, priority, keyword, run)
     return CasePage(total=len(cases), items=[CaseOut(**asdict(c)) for c in cases])
+
+
+_ASSERT_OP_DESC = {
+    "eq": "等于", "neq": "不等于", "contains": "包含", "gt": "大于", "ge": "大于等于",
+    "lt": "小于", "le": "小于等于", "regex": "正则匹配", "not_null": "不为空", "len_eq": "长度等于",
+}
+
+# 基础请求头内置候选（用例中实际出现过的值会覆盖建议值；都排在候选列表最前）
+_BUILTIN_HEADERS = {
+    "Content-Type": "application/json",
+    "Authorization": "Basic {{auth_token}}",
+    "x-yun-api-version": "v2",
+    "User-Agent": "interface-auto/1.0",
+}
+
+
+@router.get("/meta", summary="编辑用元数据（优先级/模块/请求头/断言操作符/变量候选）")
+def case_meta(file: str = Query(default="data/api_cases.xlsx")):
+    path = _resolve_file(file)
+    try:
+        result = _load_cached(path)
+    except ExcelFormatError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    # 请求头候选：聚合存量用例 —— key 按出现频次降序，建议值取该 key 最常见的完整值
+    key_freq: Counter = Counter()
+    kv_freq: Counter = Counter()
+    for c in result.cases:
+        for k, v in (c.headers or {}).items():
+            key_freq[k] += 1
+            kv_freq[(k, str(v))] += 1
+    suggest: dict[str, str] = dict(_BUILTIN_HEADERS)
+    for k in key_freq:  # 存量实测值覆盖内置默认建议（取出现频次最高的完整值）
+        best_val = max((kv_freq[(k, vv)], vv) for (kk, vv) in kv_freq if kk == k)[1]
+        suggest[k] = best_val
+    # 排序：内置基础头在前，其余按出现频次降序
+    ordered = sorted(suggest, key=lambda k: (k not in _BUILTIN_HEADERS, -key_freq.get(k, 0)))
+    header_suggest = [{"key": k, "value": suggest[k], "used": key_freq.get(k, 0)} for k in ordered]
+
+    return {
+        "priorities": sorted(excel_loader.VALID_PRIORITIES),
+        "methods": sorted(excel_loader.VALID_METHODS),
+        "assert_ops": [{"op": o, "desc": _ASSERT_OP_DESC.get(o, o),
+                        "need_expected": o in excel_loader.OPS_NEED_EXPECTED}
+                       for o in sorted(excel_loader.ASSERT_OPS)],
+        "modules": sorted({c.module for c in result.cases}),
+        "header_suggest": header_suggest,
+        "variables": sorted(set(result.variables) |
+                            set(excel_loader.load_secret_vars(ROOT / "data" / "secret_vars.xlsx"))),
+    }
 
 
 @router.get("/variables", summary="全局变量名列表（值做了掩码，不回显敏感内容）")

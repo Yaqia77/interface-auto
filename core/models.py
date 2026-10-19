@@ -13,7 +13,7 @@ class TestCase:
     module: str
     api_name: str
     case_desc: str
-    priority: str                # P0~P3
+    priority: str                # P0~P5
     run: bool                    # 是否执行
     method: str
     url: str

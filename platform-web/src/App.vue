@@ -55,8 +55,11 @@ body { margin: 0; font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsof
 .logo { height: 56px; display: flex; align-items: center; padding: 0 14px; font-weight: 600; color: #fff; background: #232c3d; font-size: 14px; }
 .side-menu { border-right: none; flex: 1; }
 .side-menu .el-menu-item { color: #bfcbd9; }
-.side-menu .el-menu-item.is-active { color: #409eff; background: #263042; }
-.side-menu .el-menu-item:hover { background: #263042; color: #fff; }
+/* 企业后台经典选中态：主题蓝实底 + 白字 */
+.side-menu .el-menu-item.is-active { color: #fff; background: #409eff; }
+.side-menu .el-menu-item.is-active .el-icon { color: #fff; }
+.side-menu .el-menu-item:not(.is-active):hover { background: #263042; color: #fff; }
+.side-menu .el-menu-item { transition: background-color .15s ease, color .15s ease; }
 .side-foot { padding: 12px 14px; font-size: 11px; color: #6b7a8f; border-top: 1px solid #232c3d; }
 .topbar { display: flex; align-items: center; border-bottom: 1px solid #e4e7ed; background: #fff; }
 .main { background: #f5f7fa; }

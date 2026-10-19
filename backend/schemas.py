@@ -36,7 +36,7 @@ class CaseUpdate(BaseModel):
     module: str | None = None
     api_name: str | None = None
     case_desc: str | None = None
-    priority: str | None = Field(default=None, description="P0~P3")
+    priority: str | None = Field(default=None, description="P0~P5")
     run: bool | None = Field(default=None, description="是否执行（写回 Y/N）")
     method: str | None = Field(default=None, description="GET/POST/PUT/DELETE/PATCH")
     url: str | None = None

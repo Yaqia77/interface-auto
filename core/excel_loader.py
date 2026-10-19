@@ -29,7 +29,7 @@ CASE_COLUMNS = {
 }
 REQUIRED_HEADERS = ["用例编号", "模块", "接口名称", "用例描述", "优先级", "是否执行", "请求方式", "请求路径", "断言"]
 VALID_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
-VALID_PRIORITIES = {"P0", "P1", "P2", "P3"}
+VALID_PRIORITIES = {"P0", "P1", "P2", "P3", "P4", "P5"}
 ASSERT_OPS = {"eq", "neq", "contains", "gt", "ge", "lt", "le", "regex", "not_null", "len_eq"}
 OPS_NEED_EXPECTED = ASSERT_OPS - {"not_null"}
 RUN_TRUE = {"Y", "YES", "TRUE", "是"}
