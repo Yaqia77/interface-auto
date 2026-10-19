@@ -12,8 +12,9 @@
 //   - interface-auto-userid  （Secret text）业务 userId
 //   - notify-webhook         （Secret text）企业微信/钉钉机器人 Webhook 地址（可选，不配则跳过群通知）
 pipeline {
-    // agent 标签按你的 Jenkins 节点改：Windows 节点常用 'windows'，Linux 容器可用 'linux' 或 any
-    agent { label 'windows' }
+    // 本地单节点（内置 built-in 节点）直接用 any 即可开箱跑；
+    // 若有多台机器，可改成 agent { label 'windows' } 并给目标节点打标签
+    agent any
 
     options {
         timestamps()                 // 日志带时间

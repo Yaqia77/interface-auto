@@ -9,6 +9,27 @@
 | `Jenkinsfile` | 声明式流水线定义（被 Jenkins 读取执行） |
 | `allurerc.mjs` | Allure 3 配置：报告默认中文 + 单文件 HTML（便于归档） |
 | `tools/gen_secret.py` | CI 里从环境变量（Jenkins 凭据）生成 `data/secret_vars.xlsx`，凭证不入 Git |
+| `jenkins/docker-compose.yml` | 本地用 Docker 一键起 Jenkins 的编排（选装 Docker 时用） |
+
+---
+
+## 零、本机还没有 Jenkins？（当前环境无 Java、无 Docker）
+
+Jenkins 运行依赖 Java。本机实测**既无 `java` 也无 `docker`**，按省事程度排序：
+
+**方式 A（推荐·零依赖）：Jenkins Windows `.msi` 安装包**
+- 下载页：`https://www.jenkins.io/download/`（Windows LTS 安装包，**自带 JRE**，无需另装 Java）
+- 安装时自动注册为 Windows 服务，装完自动开浏览器到 `http://localhost:8080`
+- 首次进入选 **Install suggested plugins**，再创建管理员账号
+
+**方式 B：Docker（需先装 Docker Desktop）**
+- 装好 Docker Desktop 后，在项目根执行：`docker compose -f jenkins/docker-compose.yml up -d`
+- 打开 `http://localhost:8080`，初始密码见 `docker logs jenkins`
+
+**方式 C：WAR + JDK（已有 Java 时）**
+- `java -jar jenkins.war --httpPort=8080`
+
+> **构建节点（真正跑 pytest/allure 的机器）**：本项目用例步骤是 Windows PowerShell 写的。最顺的做法是在**你这台已装 Python/Node/Allure 的 Windows 主机**上跑——用方式 A 装好 Jenkins 后直接用 built-in 节点即可（`Jenkinsfile` 已设为 `agent any`）。若用 Docker 起 Jenkins（方式 B），容器内默认没有 Python/Node，需要另挂一个 Windows 节点或在镜像里补依赖。
 
 ---
 
@@ -157,4 +178,3 @@
 - [ ] Webhook（或 `pollSCM`）配置并可触发
 - [ ] 定时 `cron('H 2 * * *')` 生效（任务页可见下次触发时间）
 - [ ] 故意制造失败，验证邮件 + 群机器人告警到达
-```
