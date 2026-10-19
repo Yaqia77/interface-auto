@@ -1,4 +1,9 @@
-"""执行批次接口：以子进程调用 main.py（零改写复用 pytest+报告编排），后台线程收集日志。"""
+"""执行批次接口：以子进程调用 main.py（零改写复用 pytest+报告编排），后台线程收集日志。
+
+批次记录落盘 reports/runs_history.json：服务重启/热重载不再丢失平台发起的批次历史；
+日志仅保留尾部 200 行，重启后仍在报告页可查。
+"""
+import json
 import os
 import re
 import shutil
@@ -19,9 +24,64 @@ ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上�
 
 router = APIRouter(prefix="/api/runs", tags=["执行中心"])
 
-# 内存态登记表：run_id -> 记录。重启即失，历史批次由 reports/ 目录扫描兜底。
+# 内存态登记表：run_id -> 记录。持久化兜底见 _persist / _load_history。
 _runs: dict[str, dict] = {}
 _LOCK = threading.Lock()
+
+_HISTORY = ROOT / "reports" / "runs_history.json"
+_LOG_KEEP = 200           # 落盘仅留日志尾部，排障够用且文件可控
+_PERSIST_KEYS = ("run_id", "status", "args", "started_at", "finished_at", "exit_code", "report_dir")
+
+
+def _persist(rec: dict) -> None:
+    """单批次记录落盘（状态变更时调用；失败只记日志不影响主流程）。"""
+    try:
+        _HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        history: dict = {}
+        if _HISTORY.exists():
+            try:
+                with open(_HISTORY, encoding="utf-8") as fp:
+                    history = json.load(fp)
+            except (json.JSONDecodeError, OSError):
+                history = {}
+        entry = {k: rec[k] for k in _PERSIST_KEYS}
+        entry["log_tail"] = rec["log"][-_LOG_KEEP:]
+        history[rec["run_id"]] = entry
+        # 只留最近 200 条，防无限增长
+        if len(history) > 200:
+            for old in sorted(history)[: len(history) - 200]:
+                history.pop(old)
+        tmp = _HISTORY.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as fp:
+            json.dump(history, fp, ensure_ascii=False)
+        os.replace(tmp, _HISTORY)
+    except OSError:
+        pass
+
+
+_loaded = False
+
+
+def _load_history() -> None:
+    """懒加载：首次访问接口时恢复历史批次；running 残档说明进程已死，标 error。"""
+    global _loaded
+    _loaded = True
+    if not _HISTORY.exists():
+        return
+    try:
+        with open(_HISTORY, encoding="utf-8") as fp:
+            history = json.load(fp)
+    except (json.JSONDecodeError, OSError):
+        return
+    for rid, entry in history.items():
+        if rid in _runs:
+            continue
+        log = entry.pop("log_tail", []) or []
+        rec = {"run_id": rid, "log": log, "proc": None, **{k: entry.get(k) for k in _PERSIST_KEYS}}
+        if rec["status"] == "running":
+            rec["status"] = "error"
+            log.append("（服务重启，批次执行线程已中断，状态不可知）")
+        _runs[rid] = rec
 
 _REPORT_DIR_RE = re.compile(r"\[interface-auto\] 报告目录:\s*(.+)$")
 
@@ -78,6 +138,7 @@ def _worker(run_id: str, cmd: list[str]):
         rec["finished_at"] = _now()
         if rec["status"] == "running":
             rec["status"] = _status_from(rec)
+        _persist(rec)
 
 
 @router.post("", response_model=RunOut, summary="发起执行批次", status_code=202)
@@ -106,13 +167,19 @@ def create_run(body: RunCreate):
         "finished_at": None, "exit_code": None, "report_dir": None,
     }
     with _LOCK:
+        if not _loaded:
+            _load_history()
         _runs[run_id] = rec
+        _persist(rec)
     threading.Thread(target=_worker, args=(run_id, cmd), daemon=True).start()
     return _to_out(rec)
 
 
 @router.get("", response_model=list[RunOut], summary="批次列表（API 发起 + reports/ 历史）")
 def list_runs(limit: int = 20):
+    with _LOCK:
+        if not _loaded:
+            _load_history()
     items: list[RunOut] = [_to_out(r) for r in _runs.values()]
 
     # 扫描本地 CLI 历史运行目录，补全（source=cli；状态从 allure-results 推断）
@@ -137,15 +204,21 @@ def list_runs(limit: int = 20):
 
 @router.get("/{run_id}", response_model=RunOut, summary="批次详情（含日志尾部）")
 def get_run(run_id: str):
-    rec = _runs.get(run_id)
+    with _LOCK:
+        if not _loaded:
+            _load_history()
+        rec = _runs.get(run_id)
     if rec is None:
-        raise HTTPException(status_code=404, detail=f"批次不存在或已随服务重启丢失: {run_id}")
+        raise HTTPException(status_code=404, detail=f"批次不存在: {run_id}")
     return _to_out(rec, log_tail=100)
 
 
 @router.get("/{run_id}/log", summary="批次完整日志（纯文本，供实时轮询）")
 def get_log(run_id: str):
-    rec = _runs.get(run_id)
+    with _LOCK:
+        if not _loaded:
+            _load_history()
+        rec = _runs.get(run_id)
     if rec is None:
         raise HTTPException(status_code=404, detail=f"批次不存在: {run_id}")
     return {"run_id": run_id, "status": _status_from(rec),
@@ -158,7 +231,10 @@ _CLI_RUN_RE = re.compile(r"^(?:reports[/\\])?run_\d{8}_\d{6}$")
 
 def _resolve_report_dir(run_id: str) -> str | None:
     """run_id -> 报告目录（相对项目根）。内存优先，其次认领 reports/ 历史目录。"""
-    rec = _runs.get(run_id)
+    with _LOCK:
+        if not _loaded:
+            _load_history()
+        rec = _runs.get(run_id)
     if rec:
         return rec["report_dir"]
     if _CLI_RUN_RE.match(run_id):
