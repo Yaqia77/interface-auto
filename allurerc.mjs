@@ -3,7 +3,8 @@ export default {
   plugins: {
     awesome: {
       options: {
-        reportLanguage: "zh",
+        reportLanguage: "zh",   // 报告 UI 默认中文
+        singleFile: true,       // 生成单文件 HTML，便于 Jenkins 归档与直接打开
       },
     },
   },
