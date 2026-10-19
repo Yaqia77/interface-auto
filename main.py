@@ -72,7 +72,9 @@ def main() -> None:
         print(f"[interface-auto] HTML 报告: {html_report}")
     allure_dir = report_dir / "allure-results"
     if allure_dir.exists():
-        print(f"[interface-auto] Allure 结果: {allure_dir}（执行 allure serve {allure_dir} 查看）")
+        allure_cfg = ROOT / "allurerc.mjs"  # Allure 3 报告配置（reportLanguage=zh，打开即中文）
+        cfg_arg = f' --config "{allure_cfg}"' if allure_cfg.exists() else ""
+        print(f"[interface-auto] Allure 结果: {allure_dir}（执行 allure serve{cfg_arg} {allure_dir} 查看）")
     sys.exit(exit_code)
 
 
