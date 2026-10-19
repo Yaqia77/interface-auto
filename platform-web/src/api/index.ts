@@ -60,6 +60,14 @@ export const api = {
   getRun: (runId: string) =>
     http.get<RunItem>(`/runs/${encodeURIComponent(runId)}`).then((r) => r.data),
 
+  /** 取消运行中批次（后端 taskkill 进程树；已结束批次幂等返回当前状态） */
+  cancelRun: (runId: string) =>
+    http
+      .post<{ run_id: string; status: string; cancelling: boolean }>(
+        `/runs/${encodeURIComponent(runId)}/cancel`
+      )
+      .then((r) => r.data),
+
   getRunLog: (runId: string) =>
     http
       .get<{ run_id: string; status: string; lines: number; log: string }>(

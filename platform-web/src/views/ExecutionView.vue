@@ -24,7 +24,7 @@ let timer: number | undefined;
 const router = useRouter();
 
 const statusType = (s: string) =>
-  (({ running: "warning", passed: "success", failed: "danger", error: "danger", unknown: "info" } as Record<string, any>)[s] ?? "info");
+  (({ running: "warning", passed: "success", failed: "danger", error: "danger", cancelled: "info", unknown: "info" } as Record<string, any>)[s] ?? "info");
 
 async function loadRuns() {
   runs.value = await api.listRuns(20);
@@ -73,6 +73,15 @@ function stopPolling() {
     clearInterval(timer);
     timer = undefined;
   }
+}
+
+async function cancelCurrent() {
+  if (!current.value) return;
+  const r = await api.cancelRun(current.value.run_id);
+  ElMessage[r.cancelling ? "warning" : "info"](r.cancelling ? "已终止批次进程树" : `批次已结束：${r.status}`);
+  // 立刻刷新一次，不等下一轮轮询
+  try { current.value = await api.getRun(current.value.run_id); } catch { /* 拦截器已提示 */ }
+  loadRuns();
 }
 
 function openReport(runId: string) {
@@ -141,6 +150,16 @@ onBeforeUnmount(stopPolling);
             <span v-if="current.exit_code !== null" style="float: right; color: #909399; font-size: 12px">exit={{ current.exit_code }}</span>
           </template>
           <div class="mono" style="font-size: 12px; margin-bottom: 6px; word-break: break-all">{{ current.run_id }}</div>
+          <el-button
+            v-if="current.status === 'running'"
+            size="small"
+            type="danger"
+            plain
+            style="margin-bottom: 6px"
+            @click="cancelCurrent"
+          >
+            ⏹ 取消执行
+          </el-button>
           <pre class="console">{{ logText || "等待日志…" }}</pre>
           <el-button
             v-if="current.report_dir && ['passed', 'failed'].includes(current.status)"

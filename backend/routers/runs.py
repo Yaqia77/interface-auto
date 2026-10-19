@@ -213,6 +213,28 @@ def get_run(run_id: str):
     return _to_out(rec, log_tail=100)
 
 
+@router.post("/{run_id}/cancel", summary="取消运行中的批次（终止子进程树）")
+def cancel_run(run_id: str):
+    with _LOCK:
+        if not _loaded:
+            _load_history()
+        rec = _runs.get(run_id)
+        if rec is None:
+            raise HTTPException(status_code=404, detail=f"批次不存在: {run_id}")
+        if rec["status"] != "running":
+            return {"run_id": run_id, "status": rec["status"], "cancelling": False}
+        proc = rec.get("proc")
+        rec["status"] = "cancelled"
+        rec["finished_at"] = _now()
+        rec["log"].append("[runner] 已请求取消（终止进程树）")
+        _persist(rec)
+    if proc is not None and proc.poll() is None:
+        # Windows：terminate 只杀 main.py 自身，pytest 孙进程需 /T 连树杀掉
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                       capture_output=True, text=True)
+    return {"run_id": run_id, "status": "cancelled", "cancelling": True}
+
+
 @router.get("/{run_id}/log", summary="批次完整日志（纯文本，供实时轮询）")
 def get_log(run_id: str):
     with _LOCK:
