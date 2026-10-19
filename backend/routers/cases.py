@@ -1,10 +1,12 @@
-"""用例查询接口：直接复用 core.excel_loader 解析存量 Excel。"""
+"""用例查询与写回接口：读取复用 core.excel_loader，更新走 backend.excel_writer（校验后原子落盘）。"""
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 
-from backend.schemas import CaseOut, CasePage
+from backend import excel_writer
+from backend.excel_writer import CaseWriteError
+from backend.schemas import CaseOut, CasePage, CaseUpdate
 from core import excel_loader
 from core.excel_loader import ExcelFormatError
 
@@ -96,3 +98,32 @@ def get_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
         if c.case_id == case_id:
             return CaseOut(**asdict(c))
     raise HTTPException(status_code=404, detail=f"用例不存在: {case_id}")
+
+
+_ERROR_STATUS = {"invalid": 400, "not_found": 404, "conflict": 409, "locked": 409}
+
+
+@router.put("/{case_id}", response_model=CaseOut, summary="更新用例（写回 Excel，校验通过才落盘）")
+def update_case(case_id: str, body: CaseUpdate, file: str = Query(default="data/api_cases.xlsx")):
+    path = _resolve_file(file)
+    try:
+        result = _load_cached(path)
+    except ExcelFormatError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    target = next((c for c in result.cases if c.case_id == case_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"用例不存在: {case_id}")
+
+    # 真实写入文件：目录模式下用用例自身的 source 定位到具体 xlsx
+    target_file = (path / target.source) if path.is_dir() else path
+    changes = body.model_dump(exclude_unset=True)
+    try:
+        excel_writer.apply_update(target_file, case_id, target.row, changes)
+    except CaseWriteError as e:
+        raise HTTPException(status_code=_ERROR_STATUS[e.kind], detail=str(e))
+
+    # 文件 mtime 已变，缓存自动失效；重读返回最新视图
+    fresh = next((c for c in _load_cached(path).cases if c.case_id == case_id), None)
+    if fresh is None:  # 理论不可达：写回前后都过了 loader 校验
+        raise HTTPException(status_code=500, detail="写回后未能重新读到用例")
+    return CaseOut(**asdict(fresh))

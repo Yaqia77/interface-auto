@@ -25,6 +25,12 @@ export const api = {
 
   listEnvs: () => http.get<EnvsResp>("/envs").then((r) => r.data),
 
+  /** 更新用例（只传改动字段；后端写回 Excel，校验不外溢） */
+  updateCase: (caseId: string, changes: Record<string, unknown>) =>
+    http
+      .put<CaseItem>(`/cases/${encodeURIComponent(caseId)}`, changes)
+      .then((r) => r.data),
+
   listRuns: (limit = 20) =>
     http.get<RunItem[]>("/runs", { params: { limit } }).then((r) => r.data),
 

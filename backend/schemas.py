@@ -30,6 +30,24 @@ class CasePage(BaseModel):
     items: list[CaseOut]
 
 
+class CaseUpdate(BaseModel):
+    """用例更新（只传需要改的字段；case_id 不可改，它是写回定位的行锁锚点）。"""
+
+    module: str | None = None
+    api_name: str | None = None
+    case_desc: str | None = None
+    priority: str | None = Field(default=None, description="P0~P3")
+    run: bool | None = Field(default=None, description="是否执行（写回 Y/N）")
+    method: str | None = Field(default=None, description="GET/POST/PUT/DELETE/PATCH")
+    url: str | None = None
+    headers: dict | None = None
+    params: dict | None = None
+    body: Any = None
+    extract: dict | None = None
+    asserts: list | None = Field(default=None, description="[[操作符, 取值路径, 期望值], ...]")
+    timeout: float | None = Field(default=None, description="秒，正数；传 null 清空用 exclude 控制")
+
+
 class RunCreate(BaseModel):
     """发起一次执行批次。"""
 
