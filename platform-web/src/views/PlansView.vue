@@ -3,11 +3,12 @@
  * 测试场景管理：将常用用例集合保存为可复用场景，一键发起执行。
  * 卡片列表 + 当前运行条 + 新建/编辑抽屉（树形勾选）。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { EnvInfo, PlanItem, RunItem } from "../types";
+import type { EnvInfo, PlanItem } from "../types";
+import { planRunStore, trackRun, dismissRun, hasActiveRun, ensurePlanRunStore } from "../stores/planRun";
 
 const router = useRouter();
 
@@ -25,52 +26,38 @@ async function loadPlans() {
   }
 }
 
-/* ============ 运行状态追踪 ============ */
-const running = ref<{ plan: PlanItem; run: RunItem } | null>(null);
-let pollTimer: number | undefined;
+/* ============ 运行状态追踪（共享 store，切换页面不丢失） ============ */
+// 进行中的运行置顶，其次按开始时间倒序
+const trackedRuns = computed(() =>
+  [...planRunStore.runs].sort((a, b) => {
+    const aActive = a.status === "running" || a.status === "pending" ? 0 : 1;
+    const bActive = b.status === "running" || b.status === "pending" ? 0 : 1;
+    if (aActive !== bActive) return aActive - bActive;
+    return (b.startedAt ?? b.finishedAt ?? "").localeCompare(a.startedAt ?? a.finishedAt ?? "");
+  }),
+);
 
-const canRun = computed(() => running.value === null);
+// 某场景是否正在运行（用于禁用其执行按钮，避免重复发起）
+const planRunning = (plan: PlanItem) => hasActiveRun(plan.id);
 
 async function doRun(plan: PlanItem) {
-  if (!canRun.value) return;
+  if (planRunning(plan)) {
+    ElMessage.warning("该场景已有运行中的批次");
+    return;
+  }
   try {
     const run = await api.runPlan(plan.id);
-    running.value = { plan, run };
+    trackRun(plan.id, plan.name, run.run_id);
     ElMessage.success(`批次已发起：${run.run_id}`);
-    startPolling(run.run_id);
+    loadPlans();
   } catch { /* 拦截器已提示 */ }
 }
 
-function startPolling(runId: string) {
-  stopPolling();
-  pollTimer = window.setInterval(async () => {
-    try {
-      const detail = await api.getRun(runId);
-      if (running.value) running.value = { ...running.value, run: detail };
-      if (detail.status !== "running") {
-        stopPolling();
-        ElMessage[detail.status === "passed" ? "success" : "warning"](
-          `批次结束：${detail.status}`,
-        );
-        loadPlans();
-      }
-    } catch {
-      stopPolling();
-    }
-  }, 2000);
-}
-
-function stopPolling() {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = undefined;
-  }
-}
-
-async function cancelRunning() {
-  if (!running.value) return;
-  await api.cancelRun(running.value.run.run_id);
-  ElMessage.warning("已请求取消");
+async function cancelRun(runId: string) {
+  try {
+    await api.cancelRun(runId);
+    ElMessage.warning("已请求取消");
+  } catch { /* 拦截器已提示 */ }
 }
 
 function toReport(runId: string) {
@@ -211,12 +198,13 @@ watch(treeFilter, (v) => treeRef.value?.filter(v));
 
 /* ============ 生命周期 ============ */
 onMounted(async () => {
+  ensurePlanRunStore(); // 首屏即从 localStorage 恢复历史运行并接管轮询
   await loadPlans();
   const resp = await api.listEnvs();
   envs.value = resp.envs;
+  // planRunStore 为模块级单例，首次访问自动从 localStorage 恢复并接管轮询，
+  // 组件卸载时不中断，因此无需在此手动启动/停止。
 });
-
-onBeforeUnmount(stopPolling);
 </script>
 
 <template>
@@ -227,32 +215,34 @@ onBeforeUnmount(stopPolling);
       <el-button type="primary" @click="openCreate">+ 新建场景</el-button>
     </div>
 
-    <!-- 当前运行条（运行中 or 刚结束时短暂展示） -->
-    <el-card v-if="running" shadow="never" class="run-bar">
-      <div class="run-bar-inner">
-        <span class="run-dot" :class="{ 'is-running': running.run.status === 'running' }"></span>
-        <span class="run-plan-name">{{ running.plan.name }}</span>
-        <el-tag :type="statusType(running.run.status)" size="small">{{ running.run.status }}</el-tag>
-        <span class="run-id mono">{{ running.run.run_id }}</span>
-        <div style="margin-left: auto; display: flex; gap: 8px">
+    <!-- 运行追踪条（共享 store：切换页面/刷新都不丢失，进行中置顶） -->
+    <el-card v-if="trackedRuns.length" shadow="never" class="run-bar">
+      <div
+        v-for="(r, idx) in trackedRuns"
+        :key="r.runId"
+        class="run-bar-inner"
+        :class="{ 'run-bar-row': idx > 0 }"
+      >
+        <span class="run-dot" :class="{ 'is-running': r.status === 'running' || r.status === 'pending' }"></span>
+        <span class="run-plan-name">{{ r.planName }}</span>
+        <el-tag :type="statusType(r.status)" size="small">{{ r.status }}</el-tag>
+        <span class="run-id mono">{{ r.runId }}</span>
+        <span v-if="r.finishedAt" class="run-time">{{ fmtTime(r.finishedAt) }}</span>
+        <div class="run-actions">
           <el-button
-            v-if="running.run.status === 'running'"
-            size="small"
-            type="danger"
-            plain
-            @click="cancelRunning"
+            v-if="r.status === 'running' || r.status === 'pending'"
+            size="small" type="danger" plain
+            @click="cancelRun(r.runId)"
           >⏹ 取消</el-button>
           <el-button
-            v-if="['passed', 'failed'].includes(running.run.status)"
-            size="small"
-            type="primary"
-            @click="toReport(running.run.run_id)"
+            v-if="['passed', 'failed', 'error'].includes(r.status)"
+            size="small" type="primary"
+            @click="toReport(r.runId)"
           >📊 查看报告</el-button>
           <el-button
-            v-if="running.run.status !== 'running'"
-            size="small"
-            text
-            @click="running = null"
+            v-if="r.status !== 'running' && r.status !== 'pending'"
+            size="small" text
+            @click="dismissRun(r.runId)"
           >✕ 收起</el-button>
         </div>
       </div>
@@ -276,7 +266,7 @@ onBeforeUnmount(stopPolling);
             <div class="card-head">
               <span class="card-name" :title="plan.name">{{ plan.name }}</span>
               <el-tag
-                v-if="running?.plan.id === plan.id"
+                v-if="planRunning(plan)"
                 type="warning"
                 size="small"
               >运行中</el-tag>
@@ -292,13 +282,21 @@ onBeforeUnmount(stopPolling);
 
           <div class="card-last">
             最近执行：{{ fmtTime(plan.last_run_at) }}
+            <el-button
+              v-if="plan.last_run_id"
+              class="card-report-btn"
+              size="small"
+              text
+              type="primary"
+              @click="toReport(plan.last_run_id!)"
+            >📊 查看上次报告</el-button>
           </div>
 
           <div class="card-actions">
             <el-button
               size="small"
               type="primary"
-              :disabled="!canRun"
+              :disabled="planRunning(plan)"
               @click="doRun(plan)"
             >▶ 执行</el-button>
             <el-button size="small" @click="openEdit(plan)">✏ 编辑</el-button>
@@ -380,6 +378,9 @@ onBeforeUnmount(stopPolling);
 
 .run-bar { margin-bottom: 12px; border-left: 3px solid #409eff; }
 .run-bar-inner { display: flex; align-items: center; gap: 10px; }
+.run-bar-row { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #ebeef5; }
+.run-actions { margin-left: auto; display: flex; gap: 8px; }
+.run-time { font-size: 12px; color: #a0a4a8; }
 .run-dot { width: 10px; height: 10px; border-radius: 50%; background: #909399; flex-shrink: 0; }
 .run-dot.is-running { background: #409eff; animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
@@ -397,6 +398,7 @@ onBeforeUnmount(stopPolling);
 }
 .card-tags { display: flex; gap: 6px; margin-bottom: 6px; }
 .card-last { font-size: 11px; color: #a0a4a8; margin-bottom: 10px; }
+.card-report-btn { margin-left: 6px; height: auto; padding: 0; font-size: 11px; vertical-align: baseline; }
 .card-actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
 .tree-wrap { width: 100%; }
