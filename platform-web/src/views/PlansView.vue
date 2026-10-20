@@ -212,7 +212,7 @@ onMounted(async () => {
     <!-- 顶部工具栏 -->
     <div class="page-header">
       <span class="page-title">共 {{ plans.length }} 个场景</span>
-      <el-button type="primary" @click="openCreate">+ 新建场景</el-button>
+      <el-button v-perm="'plan:manage'" type="primary" @click="openCreate">+ 新建场景</el-button>
     </div>
 
     <!-- 运行追踪条（共享 store：切换页面/刷新都不丢失，进行中置顶） -->
@@ -294,13 +294,14 @@ onMounted(async () => {
 
           <div class="card-actions">
             <el-button
+              v-perm="'run:create'"
               size="small"
               type="primary"
               :disabled="planRunning(plan)"
               @click="doRun(plan)"
             >▶ 执行</el-button>
-            <el-button size="small" @click="openEdit(plan)">✏ 编辑</el-button>
-            <el-button size="small" type="danger" plain @click="removePlan(plan)">🗑</el-button>
+            <el-button v-perm="'plan:manage'" size="small" @click="openEdit(plan)">✏ 编辑</el-button>
+            <el-button v-perm="'plan:manage'" size="small" type="danger" plain @click="removePlan(plan)">🗑</el-button>
           </div>
         </el-card>
       </el-col>

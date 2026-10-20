@@ -14,10 +14,10 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
-from backend import allure_store
+from backend import allure_store, authz
 from backend.schemas import RunCreate, RunOut
 
 ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上溯两级）
@@ -236,7 +236,7 @@ def list_runs(limit: int = 20):
             rel = _rel(str(d))
             if rel in known:
                 continue
-            ts = datetime.strptime(d.name[4:], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+            ts = _dir_ts(d.name)
             results = d / "allure-results"
             status = allure_store.infer_status(results) if results.is_dir() else "unknown"
             items.append(RunOut(run_id=rel, status=status, source="cli",
@@ -341,6 +341,14 @@ def get_log(run_id: str):
 _CLI_RUN_RE = re.compile(r"^(?:reports[/\\])?run_\d{8}_\d{6}$")
 
 
+def _dir_ts(name: str) -> str:
+    """run_YYYYMMDD_HHMMSS 目录名 → 可读时间；手工改名/临时目录返回空而不拖垮整个列表。"""
+    try:
+        return datetime.strptime(name[4:], "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return ""
+
+
 def _resolve_report_dir(run_id: str) -> str | None:
     """run_id -> 报告目录（相对项目根）。内存优先，其次认领 reports/ 历史目录。"""
     with _LOCK:
@@ -422,3 +430,88 @@ def get_run_case(run_id: str, case_id: str):
     if detail is None:
         raise HTTPException(status_code=404, detail=f"批次 {run_id} 中不存在用例 {case_id}")
     return detail
+
+
+# ==================== 报告删除 / 保留策略（需 report:delete 权限） ====================
+
+
+def _remove_history(run_id: str) -> None:
+    """从 runs_history.json 拽掉指定批次记录。"""
+    try:
+        if not _HISTORY.exists():
+            return
+        with open(_HISTORY, encoding="utf-8") as fp:
+            history = json.load(fp)
+        if run_id in history:
+            history.pop(run_id)
+            tmp = _HISTORY.with_suffix(".tmp")
+            with open(tmp, "w", encoding="utf-8") as fp:
+                json.dump(history, fp, ensure_ascii=False)
+            os.replace(tmp, _HISTORY)
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
+def _clear_plan_refs(run_id: str) -> None:
+    """清理场景卡片对已删批次的引用，避免「查看上次报告」指向 404。"""
+    try:
+        from backend import plan_store
+        for p in plan_store.list_all():
+            if p.get("last_run_id") == run_id:
+                plan_store.update(p["id"], last_run_id=None, last_run_at=None)
+    except Exception:
+        pass  # 引用清理失败不影响删除主流程
+
+
+def _delete_run_internal(run_id: str) -> dict:
+    """删除单个批次：内存记录 + 历史条目 + 报告目录。抛 HTTPException 由调用方兜权限。"""
+    with _LOCK:
+        if not _loaded:
+            _load_history()
+        rec = _runs.get(run_id)
+        if rec is not None and rec["status"] == "running":
+            raise HTTPException(status_code=400, detail=f"批次运行中，不可删除: {run_id}")
+
+    rel = _resolve_report_dir(run_id)
+    deleted_dir = None
+    if rel:
+        d = (ROOT / rel).resolve()
+        reports_root = (ROOT / "reports").resolve()
+        # 安全护栏：只允许删 reports/ 下的批次目录，防路径穿越
+        if reports_root not in d.parents or d == reports_root:
+            raise HTTPException(status_code=400, detail=f"非法报告目录，拒绝删除: {rel}")
+        if d.is_dir():
+            shutil.rmtree(d, ignore_errors=True)
+            deleted_dir = rel
+
+    # 既无内存记录也无可删目录 → 批次不存在（避免前端误报“删除成功”）
+    if rec is None and deleted_dir is None:
+        raise HTTPException(status_code=404, detail=f"批次不存在或报告目录已缺失: {run_id}")
+
+    with _LOCK:
+        _runs.pop(run_id, None)
+    _remove_history(run_id)
+    _clear_plan_refs(run_id)
+    return {"run_id": run_id, "deleted_report_dir": deleted_dir}
+
+
+@router.delete("/{run_id}", summary="删除批次报告（含目录清理）")
+def delete_run(run_id: str, _: dict = Depends(authz.require_perm("report:delete"))):
+    return _delete_run_internal(run_id)
+
+
+@router.post("/cleanup", summary="清理旧报告：按时间保留最近 keep 个批次，其余删除")
+def cleanup_runs(keep: int = 20, _: dict = Depends(authz.require_perm("report:delete"))):
+    keep = max(keep, 0)
+    runs = list_runs(limit=1000)
+    # 只删已结束且能定位到报告目录的批次，按开始时间倒序保留前 keep 个
+    finished = [r for r in runs if r.status not in ("running", "pending") and r.report_dir]
+    doomed = finished[keep:]
+    deleted: list[str] = []
+    for r in doomed:
+        try:
+            _delete_run_internal(r.run_id)
+            deleted.append(r.run_id)
+        except HTTPException:
+            continue  # 单个失败不阻断批量清理
+    return {"keep": keep, "scanned": len(runs), "deleted": len(deleted), "deleted_ids": deleted}

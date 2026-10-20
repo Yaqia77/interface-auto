@@ -2,7 +2,7 @@
 /** 批次报告页（按原型重构）：无 runId 时落批次列表；有则展示批次概览 + 用例明细筛选 + 失败归类 + 执行详情抽屉 + Allure + 与上批次对比。 */
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { RunCaseDetail, RunCaseSummary, RunItem } from "../types";
 
@@ -44,6 +44,43 @@ async function loadRunList() {
   finally { loading.value = false; }
 }
 function openRun(rid: string) { router.push({ path: "/report", query: { runId: rid } }); }
+
+/* ================= 报告删除 / 旧报告清理（需 report:delete 权限，后端二次校验） ================= */
+const KEEP_RECENT = 20;   // 清理时保留的最近批次数
+const cleaning = ref(false);
+
+async function removeRun(row: RunItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除批次 ${row.run_id}？其报告目录与明细将一并删除，不可恢复。`,
+      "删除报告",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch { return; /* 用户取消 */ }
+  try {
+    await api.deleteRun(row.run_id);
+    ElMessage.success("批次报告已删除");
+    loadRunList();
+  } catch { /* 拦截器已提示 */ }
+}
+
+async function cleanupOld() {
+  try {
+    await ElMessageBox.confirm(
+      `将按开始时间保留最近 ${KEEP_RECENT} 个批次，其余已结束批次的报告目录全部删除，确认继续？`,
+      "清理旧报告",
+      { type: "warning", confirmButtonText: "清理", cancelButtonText: "取消" },
+    );
+  } catch { return; }
+  cleaning.value = true;
+  try {
+    const resp = await api.cleanupRuns(KEEP_RECENT);
+    ElMessage.success(`已清理 ${resp.deleted} 个旧报告（保留最近 ${resp.keep} 个）`);
+    loadRunList();
+  } catch { /* 拦截器已提示 */ } finally {
+    cleaning.value = false;
+  }
+}
 
 const activeTab = ref("detail");
 const allureSrc = ref("");       // 懒加载：切到 Allure Tab 才设 src（首次现场生成可能 30s+）
@@ -357,6 +394,9 @@ watch(runId, () => load());
       <div class="page-desc">选择一个批次查看用例明细、失败归类、Allure 报告与上批次对比。</div>
       <div class="list-actions">
         <el-button size="small" @click="loadRunList">⟳ 刷新</el-button>
+        <el-button v-perm="'report:delete'" size="small" type="danger" plain :loading="cleaning" @click="cleanupOld">
+          🧹 清理旧报告（保留 {{ KEEP_RECENT }} 个）
+        </el-button>
         <el-button size="small" type="primary" @click="router.push('/execution')">🚀 去执行中心发起新批次</el-button>
       </div>
       <el-card shadow="never" style="margin-top: 12px">
@@ -376,9 +416,17 @@ watch(runId, () => load());
           <el-table-column label="开始时间" width="190">
             <template #default="{ row }"><span class="mono">{{ row.started_at ?? "—" }}</span></template>
           </el-table-column>
-          <el-table-column label="操作" width="130" fixed="right">
+          <el-table-column label="操作" width="190" fixed="right">
             <template #default="{ row }">
               <el-button size="small" text type="primary" @click="openRun(row.run_id)">查看报告 ›</el-button>
+              <el-button
+                v-perm="'report:delete'"
+                size="small"
+                text
+                type="danger"
+                :disabled="row.status === 'running' || row.status === 'pending'"
+                @click="removeRun(row)"
+              >删除</el-button>
             </template>
           </el-table-column>
           <template #empty><span style="color: #909399">暂无批次，去执行中心跑一次吧。</span></template>

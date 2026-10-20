@@ -243,3 +243,34 @@ export interface ScheduleUpdateReq {
   run_config?: Record<string, unknown>;
   enabled?: boolean;
 }
+
+/** 用户与权限（/api/auth）：后端绝不下发密码字段 */
+export interface UserInfo {
+  username: string;
+  display_name: string;
+  role: "admin" | "tl" | "qa" | "dev" | "viewer" | string;
+  role_name: string;
+  enabled: boolean;
+  created_at: string | null;
+  updated_at: string | null;
+  permissions: string[];
+}
+
+export interface LoginResp {
+  token: string;
+  user: UserInfo;
+}
+
+export interface UserCreateReq {
+  username: string;
+  password: string;
+  display_name?: string;
+  role: string;
+}
+
+export interface UserUpdateReq {
+  display_name?: string;
+  role?: string;
+  enabled?: boolean;
+  password?: string;
+}

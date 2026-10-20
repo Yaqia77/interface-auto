@@ -1,13 +1,30 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq } from "../types";
+import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
+
+// 请求拦截：统一注入登录态
+http.interceptors.request.use((cfg) => {
+  const token = getToken();
+  if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  return cfg;
+});
 
 http.interceptors.response.use(
   (resp) => resp,
   (error) => {
+    // 401：登录态失效，清 token 后硬跳登录页（避开在登录页本身死循环）
+    if (error.response?.status === 401) {
+      clearToken();
+      if (window.location.pathname !== "/login") {
+        ElMessage.warning("登录已过期，请重新登录");
+        window.location.assign("/login");
+      }
+      return Promise.reject(error);
+    }
     // 错误归一：后端 detail 优先，其次网络层信息
     const detail = error.response?.data?.detail ?? error.message;
     ElMessage.error(typeof detail === "string" ? detail : JSON.stringify(detail));
@@ -16,6 +33,25 @@ http.interceptors.response.use(
 );
 
 export const api = {
+  /* ---------- 登录与用户 ---------- */
+  login: (body: { username: string; password: string }) =>
+    http.post<LoginResp>("/auth/login", body).then((r) => r.data),
+
+  logout: () => http.post<{ ok: boolean }>("/auth/logout").then((r) => r.data),
+
+  getMe: () => http.get<UserInfo>("/auth/me").then((r) => r.data),
+
+  listUsers: () => http.get<UserInfo[]>("/auth/users").then((r) => r.data),
+
+  createUser: (body: UserCreateReq) =>
+    http.post<UserInfo>("/auth/users", body).then((r) => r.data),
+
+  updateUser: (username: string, body: UserUpdateReq) =>
+    http.put<UserInfo>(`/auth/users/${encodeURIComponent(username)}`, body).then((r) => r.data),
+
+  deleteUser: (username: string) =>
+    http.delete<{ ok: boolean }>(`/auth/users/${encodeURIComponent(username)}`).then((r) => r.data),
+
   listCases: (params: {
     module?: string;
     priority?: string;
@@ -71,6 +107,22 @@ export const api = {
     http
       .post<{ run_id: string; status: string; cancelling: boolean }>(
         `/runs/${encodeURIComponent(runId)}/cancel`
+      )
+      .then((r) => r.data),
+
+  /** 删除批次报告（含报告目录；需 report:delete 权限） */
+  deleteRun: (runId: string) =>
+    http
+      .delete<{ run_id: string; deleted_report_dir: string | null }>(
+        `/runs/${encodeURIComponent(runId)}`
+      )
+      .then((r) => r.data),
+
+  /** 清理旧报告：保留最近 keep 个批次，其余删除 */
+  cleanupRuns: (keep = 20) =>
+    http
+      .post<{ keep: number; scanned: number; deleted: number; deleted_ids: string[] }>(
+        `/runs/cleanup?keep=${keep}`
       )
       .then((r) => r.data),
 

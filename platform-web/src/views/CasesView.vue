@@ -624,10 +624,10 @@ onMounted(async () => {
           <el-form-item>
             <el-button type="primary" @click="search">查询</el-button>
             <el-button @click="reset">重置</el-button>
-            <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
-            <el-button type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
+            <el-button v-perm="'case:write'" type="success" plain @click="openCreate">＋ 新增用例</el-button>
+            <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
             <el-button plain @click="doExport">⬇ 导出</el-button>
-            <el-button plain @click="triggerImport">⬆ 导入</el-button>
+            <el-button v-perm="'case:write'" plain @click="triggerImport">⬆ 导入</el-button>
             <input ref="importInput" type="file" accept=".xlsx" style="display:none" @change="onFileSelected" />
           </el-form-item>
         </el-form>
@@ -638,8 +638,8 @@ onMounted(async () => {
           <span class="cur-mod">当前模块：<b>{{ activeModule || "全部用例" }}</b>（{{ visibleCases.length }} 条）</span>
           <div v-if="selected.length" style="display: flex; gap: 8px; align-items: center">
             <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条</span>
-            <el-button size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
-            <el-button size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
+            <el-button v-perm="'case:write'" size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
+            <el-button v-perm="'case:write'" size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
           </div>
         </div>
         <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
@@ -693,10 +693,10 @@ onMounted(async () => {
             <template #default="{ row }">
               <div class="op-cell">
                 <el-button size="small" text type="primary" @click="openHistory(row)">历史</el-button>
-                <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
-                <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
-                <el-button size="small" text type="warning" @click="openDeps(row)">依赖</el-button>
-                <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
+                <el-button v-perm="'case:write'" size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
+                <el-button v-perm="'case:write'" size="small" text type="primary" @click="openCopy(row)">复制</el-button>
+                <el-button v-perm="'case:write'" size="small" text type="warning" @click="openDeps(row)">依赖</el-button>
+                <el-popconfirm v-perm="'case:delete'" :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
                   <template #reference>
                     <el-button size="small" text type="danger">删除</el-button>
                   </template>

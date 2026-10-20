@@ -31,6 +31,9 @@ data/schedules.json
 # 用例依赖关系（用户配置的依赖链，不入库）
 data/dependencies.json
 
+# 平台用户账号（含密码哈希，绝不入库；首次启动自动播种默认角色）
+data/users.json
+
 # Excel 打开时的临时文件
 ~$*
 

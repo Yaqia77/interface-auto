@@ -193,8 +193,42 @@ env:
 - **Excel 校验**：格式错误精确定位，如 `[_verify_broken.xlsx → 用例 第2行 K列(请求体)] JSON 解析失败`
 - **日志**：`logs/` 下按运行时间戳滚动，含每条用例的完整报文
 
+## 平台版（Web）：登录与角色权限
+
+平台后端 `backend/` + 前端 `platform-web/`，浏览器访问统一入口。所有 `/api/*` 接口默认需要登录态，
+细粒度权限由各接口的 `require_perm(...)` 二次校验（前端 `v-perm` 只做按钮显隐，不是安全边界）。
+
+```bash
+# 后端（首次启动自动播种 5 个角色账号）
+.venv\Scripts\python.exe -m uvicorn backend.main:app --reload --port 8000
+# 前端
+cd platform-web ; npm run dev
+# 权限全链路冒烟（需后端已启动）
+.venv\Scripts\python.exe tools\smoke_authz.py
+```
+
+角色与权限矩阵（`backend/authz.py`）：
+
+| 权限码 | admin | tl | qa | dev | viewer |
+|---|---|---|---|---|---|
+| `case:write` 用例编辑/导入 | ✓ | ✓ | ✓ | | |
+| `case:delete` 用例删除 | ✓ | ✓ | | | |
+| `plan:manage` 测试场景管理 | ✓ | ✓ | ✓ | | |
+| `run:create` 触发/取消执行 | ✓ | ✓ | ✓ | ✓ | |
+| `env:manage` / `secret:manage` / `webhook:manage` / `schedule:manage` | ✓ | ✓ | | | |
+| `report:delete` 报告删除与旧报告清理 | ✓ | ✓ | | | |
+| `user:manage` 用户管理 | ✓ | | | | |
+
+说明：
+
+- 播种账号 `admin/tl/qa/dev/viewer`（密码同用户名的 123 后缀），**生产部署请立即在「用户管理」改密**；
+  账号数据存 `data/users.json`（已 gitignore，密码以 PBKDF2-HMAC-SHA256 加盐哈希保存）
+- 报告堆积处理：报告列表行内「删除」+ 顶部「清理旧报告」（按时间保留最近 N 个批次，
+  同步清理报告目录、历史条目与场景卡片的批次引用；运行中的批次拒绝删除）
+
 ## 路线图
 
 - [x] v1：Excel 驱动 + CLI 运行 + 双报告（HTML / Allure）
 - [ ] v1.1：CI 集成（Jenkinsfile / GitHub Actions）、失败通知（钉钉/企微/邮件）
-- [ ] v2：页面版（FastAPI + SQLite + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
+- [ ] v2：页面版（FastAPI + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
+  - [x] v2 骨架：用例/场景/执行/报告/环境/凭证/通知/定时任务 + 登录与 RBAC 权限

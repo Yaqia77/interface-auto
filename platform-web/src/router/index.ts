@@ -1,9 +1,17 @@
 import { createRouter, createWebHistory } from "vue-router";
+import { hasPerm } from "../stores/auth";
+import { getToken } from "../utils/session";
 
 const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: "/", redirect: "/dashboard" },
+    {
+      path: "/login",
+      name: "login",
+      component: () => import("../views/LoginView.vue"),
+      meta: { title: "登录", public: true },
+    },
     {
       path: "/dashboard",
       name: "dashboard",
@@ -38,25 +46,31 @@ const router = createRouter({
       path: "/envs",
       name: "envs",
       component: () => import("../views/EnvView.vue"),
-      meta: { title: "环境配置" },
+      meta: { title: "环境配置", perm: "env:manage" },
     },
     {
       path: "/secrets",
       name: "secrets",
       component: () => import("../views/SecretsView.vue"),
-      meta: { title: "凭证管理" },
+      meta: { title: "凭证管理", perm: "secret:manage" },
     },
     {
       path: "/notifications",
       name: "notifications",
       component: () => import("../views/NotificationsView.vue"),
-      meta: { title: "通知配置" },
+      meta: { title: "通知配置", perm: "webhook:manage" },
     },
     {
       path: "/schedules",
       name: "schedules",
       component: () => import("../views/SchedulesView.vue"),
-      meta: { title: "定时任务" },
+      meta: { title: "定时任务", perm: "schedule:manage" },
+    },
+    {
+      path: "/users",
+      name: "users",
+      component: () => import("../views/UsersView.vue"),
+      meta: { title: "用户管理", perm: "user:manage" },
     },
     {
       // run_id 可能含 "/"（cli 历史批次 reports/run_xxx），用 query 传参规避动态路由歧义；
@@ -67,6 +81,26 @@ const router = createRouter({
       meta: { title: "报告详情" },
     },
   ],
+});
+
+/**
+ * 菜单级路由守卫（设计文档 RBAC 第一道粒度）：
+ * 未登录 → 登录页；登录后访问登录页 → 工作台；meta.perm 不满足 → 回工作台。
+ * 后端接口仍有 require_perm 二次校验，此处仅为体验层拦截。
+ */
+router.beforeEach((to) => {
+  const authed = !!getToken();
+  if (to.meta.public) {
+    return authed && to.path === "/login" ? "/dashboard" : true;
+  }
+  if (!authed) {
+    return { path: "/login", query: to.fullPath !== "/dashboard" ? { redirect: to.fullPath } : {} };
+  }
+  const permCode = to.meta.perm as string | undefined;
+  if (permCode && !hasPerm(permCode)) {
+    return "/dashboard";
+  }
+  return true;
 });
 
 export default router;

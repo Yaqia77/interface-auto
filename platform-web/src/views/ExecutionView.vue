@@ -2,7 +2,7 @@
 /** 执行中心：发起批次 → 轮询日志 → 查看/打开中文 Allure 报告。 */
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { EnvInfo, RunItem } from "../types";
 
@@ -177,6 +177,23 @@ function toReportPage(runId: string) {
   router.push({ path: "/report", query: { runId } });
 }
 
+/** 删除批次报告（需 report:delete 权限，后端二次校验）；正在跑的批次不允许删 */
+async function removeRun(row: RunItem) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除批次 ${row.run_id}？其报告目录与明细将一并删除，不可恢复。`,
+      "删除报告",
+      { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" },
+    );
+  } catch { return; /* 用户取消 */ }
+  try {
+    await api.deleteRun(row.run_id);
+    ElMessage.success("批次报告已删除");
+    if (current.value?.run_id === row.run_id) { current.value = null; logText.value = ""; }
+    loadRuns();
+  } catch { /* 拦截器已提示 */ }
+}
+
 function watchRun(run: RunItem) {
   if (run.source !== "api") {
     // cli 历史批次没有内存日志，直接进站内报告页
@@ -292,7 +309,7 @@ onBeforeUnmount(stopPolling);
               </el-collapse-item>
             </el-collapse>
 
-            <el-button type="primary" :loading="launching" style="width: 100%; margin-top: 10px" @click="start">
+            <el-button v-perm="'run:create'" type="primary" :loading="launching" style="width: 100%; margin-top: 10px" @click="start">
               ▶ 开始执行<template v-if="rangeMode === 'pick' && pickedCount">（{{ pickedCount }} 条）</template>
             </el-button>
           </el-form>
@@ -307,6 +324,7 @@ onBeforeUnmount(stopPolling);
           <div class="mono" style="font-size: 12px; margin-bottom: 6px; word-break: break-all">{{ current.run_id }}</div>
           <el-button
             v-if="current.status === 'running'"
+            v-perm="'run:create'"
             size="small"
             type="danger"
             plain
@@ -347,7 +365,7 @@ onBeforeUnmount(stopPolling);
               <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
             </el-table-column>
             <el-table-column prop="started_at" label="开始时间" width="150" />
-            <el-table-column label="操作" width="230">
+            <el-table-column label="操作" width="270">
               <template #default="{ row }">
                 <el-button size="small" text type="primary" @click="watchRun(row)">
                   {{ row.source === "api" ? "看日志" : "明细" }}
@@ -368,6 +386,16 @@ onBeforeUnmount(stopPolling);
                   @click="openReport(row.run_id)"
                 >
                   Allure
+                </el-button>
+                <el-button
+                  v-perm="'report:delete'"
+                  size="small"
+                  text
+                  type="danger"
+                  :disabled="row.status === 'running' || row.status === 'pending'"
+                  @click="removeRun(row)"
+                >
+                  删除
                 </el-button>
               </template>
             </el-table-column>

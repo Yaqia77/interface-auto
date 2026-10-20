@@ -1,19 +1,25 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
-import { useRoute } from "vue-router";
+import { computed, onMounted, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
 import { api } from "./api";
+import { currentUser, logout } from "./stores/auth";
 import type { EnvInfo } from "./types";
 
 const route = useRoute();
+const router = useRouter();
 const title = computed(() => (route.meta.title as string) ?? "interface-auto");
 // 菜单选中态归属：/report 等二级页通过 meta.active 指定高亮的菜单项
 const activeMenu = computed(() => (route.meta.active as string) ?? route.path);
+// 登录页不带平台外壳（侧栏/顶栏）
+const barePage = computed(() => route.meta.public === true);
 
 // 顶栏环境指示（全局共享的简化版：当前仅展示，切换在任务表单里做）
 const envs = ref<EnvInfo[]>([]);
 const currentEnv = ref<string>("");
 
-onMounted(async () => {
+async function loadEnv() {
+  if (!currentUser.value) return;   // 未登录不拉环境数据
   try {
     const resp = await api.listEnvs();
     envs.value = resp.envs;
@@ -21,11 +27,28 @@ onMounted(async () => {
   } catch {
     /* 拦截器已提示 */
   }
-});
+}
+
+onMounted(loadEnv);
+// 登录页不带平台外壳，App 只挂载一次；登录后需补拉一次环境指示
+watch(currentUser, loadEnv);
+
+async function doLogout() {
+  await logout();
+  ElMessage.success("已退出登录");
+  router.replace("/login");
+}
+
+function onUserCommand(cmd: string) {
+  if (cmd === "logout") doLogout();
+}
 </script>
 
 <template>
-  <el-container style="height: 100vh">
+  <!-- 登录等无壳页：不渲染侧栏/顶栏 -->
+  <router-view v-if="barePage" />
+
+  <el-container v-else style="height: 100vh">
     <el-aside width="220px" class="side">
       <div class="logo">● Interface Auto 平台</div>
       <el-menu router :default-active="activeMenu" class="side-menu">
@@ -40,12 +63,15 @@ onMounted(async () => {
         <el-menu-item-group title="执行与报告">
           <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
           <el-menu-item index="/report">📈 报告详情</el-menu-item>
-          <el-menu-item index="/schedules">⏰ 定时任务</el-menu-item>
+          <el-menu-item v-perm="'schedule:manage'" index="/schedules">⏰ 定时任务</el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group title="配置中心">
-          <el-menu-item index="/envs">🌐 环境配置</el-menu-item>
-          <el-menu-item index="/secrets">🔑 凭证管理</el-menu-item>
-          <el-menu-item index="/notifications">🔔 通知配置</el-menu-item>
+          <el-menu-item v-perm="'env:manage'" index="/envs">🌐 环境配置</el-menu-item>
+          <el-menu-item v-perm="'secret:manage'" index="/secrets">🔑 凭证管理</el-menu-item>
+          <el-menu-item v-perm="'webhook:manage'" index="/notifications">🔔 通知配置</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group title="系统管理">
+          <el-menu-item v-perm="'user:manage'" index="/users">👥 用户管理</el-menu-item>
         </el-menu-item-group>
       </el-menu>
       <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>
@@ -53,11 +79,24 @@ onMounted(async () => {
     <el-container>
       <el-header class="topbar">
         <b>{{ title }}</b>
-        <div style="margin-left: auto">
+        <div style="margin-left: auto; display: flex; align-items: center; gap: 10px">
           <el-tag v-if="currentEnv" size="small">环境：{{ currentEnv }}</el-tag>
           <span v-if="envs.length > 1" style="color: #909399; font-size: 12px">
             （共 {{ envs.length }} 个环境）
           </span>
+          <el-dropdown v-if="currentUser" trigger="click" @command="onUserCommand">
+            <span class="user-chip">
+              <el-tag size="small" :type="currentUser.role === 'admin' ? 'danger' : 'info'" effect="dark">
+                {{ currentUser.role_name }}
+              </el-tag>
+              <span class="user-name">{{ currentUser.display_name || currentUser.username }}</span>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout">退出登录</el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
         </div>
       </el-header>
       <el-main class="main">
@@ -90,5 +129,7 @@ body { margin: 0; font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsof
 }
 .side-foot { padding: 12px 14px; font-size: 11px; color: #63718a; border-top: 1px solid #16202e; }
 .topbar { display: flex; align-items: center; border-bottom: 1px solid #e4e7ed; background: #fff; }
+.user-chip { display: flex; align-items: center; gap: 6px; cursor: pointer; outline: none; }
+.user-name { font-size: 13px; color: #303133; }
 .main { background: #f5f7fa; }
 </style>

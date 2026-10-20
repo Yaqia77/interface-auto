@@ -229,3 +229,51 @@ class DepsSetRequest(BaseModel):
     """设置用例依赖列表。"""
 
     dependencies: list[str] = Field(description="前置依赖用例 ID 列表")
+
+
+# ==================== 用户与权限（RBAC） ====================
+
+
+class LoginRequest(BaseModel):
+    """登录请求。"""
+
+    username: str
+    password: str
+
+
+class UserOut(BaseModel):
+    """用户输出：绝不包含密码/哈希字段。"""
+
+    username: str
+    display_name: str
+    role: str
+    role_name: str
+    enabled: bool = True
+    created_at: str | None = None
+    updated_at: str | None = None
+    permissions: list[str] = []
+
+
+class LoginResponse(BaseModel):
+    """登录响应：token + 用户信息（含权限码，前端 v-perm 据此显隐）。"""
+
+    token: str
+    user: UserOut
+
+
+class UserCreate(BaseModel):
+    """新建用户。"""
+
+    username: str
+    password: str
+    display_name: str = ""
+    role: str = Field(default="qa", description="admin/tl/qa/dev/viewer")
+
+
+class UserUpdate(BaseModel):
+    """更新用户（只传改动字段）。"""
+
+    display_name: str | None = None
+    role: str | None = None
+    enabled: bool | None = None
+    password: str | None = None
