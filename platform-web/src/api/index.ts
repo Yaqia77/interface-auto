@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -170,4 +170,24 @@ export const api = {
   testWebhook: (id: string) =>
     http.post<{ ok: boolean; status_code: number; response: string }>(
       `/webhooks/${encodeURIComponent(id)}/test`).then((r) => r.data),
+
+  /* ---------- 定时任务 ---------- */
+  listSchedules: () => http.get<ScheduleItem[]>("/schedules").then((r) => r.data),
+
+  createSchedule: (body: ScheduleCreateReq) =>
+    http.post<ScheduleItem>("/schedules", body).then((r) => r.data),
+
+  updateSchedule: (id: string, body: ScheduleUpdateReq) =>
+    http.put<ScheduleItem>(`/schedules/${encodeURIComponent(id)}`, body).then((r) => r.data),
+
+  deleteSchedule: (id: string) =>
+    http.delete<{ ok: boolean }>(`/schedules/${encodeURIComponent(id)}`).then((r) => r.data),
+
+  runSchedule: (id: string) =>
+    http.post<RunItem>(`/schedules/${encodeURIComponent(id)}/run`).then((r) => r.data),
+
+  previewCron: (cron: string, n = 5) =>
+    http.get<{ cron: string; next_runs: string[] }>("/schedules/preview/next-runs", {
+      params: { cron, n },
+    }).then((r) => r.data),
 };

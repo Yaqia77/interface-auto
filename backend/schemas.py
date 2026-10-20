@@ -181,3 +181,42 @@ class WebhookOut(BaseModel):
     enabled: bool
     created_at: str
     updated_at: str
+
+
+# ==================== 定时任务 ====================
+
+
+class ScheduleCreate(BaseModel):
+    """新建定时任务。"""
+
+    name: str = Field(description="任务名称")
+    cron: str = Field(description="Cron 表达式（标准 5 位：分 时 日 月 周）")
+    plan_id: str = Field(default="", description="关联场景 ID（与 run_config 二选一）")
+    run_config: dict | None = Field(default=None, description="直接指定执行参数（env/module/priority 等）")
+    enabled: bool = True
+
+
+class ScheduleUpdate(BaseModel):
+    """更新定时任务（只传需修改字段）。"""
+
+    name: str | None = None
+    cron: str | None = None
+    plan_id: str | None = None
+    run_config: dict | None = None
+    enabled: bool | None = None
+
+
+class ScheduleOut(BaseModel):
+    """定时任务对外视图。"""
+
+    id: str
+    name: str
+    cron: str
+    plan_id: str
+    run_config: dict
+    enabled: bool
+    last_run_id: str | None = None
+    last_run_at: str | None = None
+    next_run_at: str | None = None
+    created_at: str
+    updated_at: str

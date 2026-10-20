@@ -40,6 +40,7 @@ onMounted(async () => {
         <el-menu-item-group title="执行与报告">
           <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
           <el-menu-item index="/report">📈 报告详情</el-menu-item>
+          <el-menu-item index="/schedules">⏰ 定时任务</el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group title="配置中心">
           <el-menu-item index="/envs">🌐 环境配置</el-menu-item>

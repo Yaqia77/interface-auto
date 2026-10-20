@@ -25,6 +25,9 @@ data/plans.json
 # Webhook 通知配置（用户创建的推送规则，不入库）
 data/webhooks.json
 
+# 定时任务配置（用户创建的调度计划，不入库）
+data/schedules.json
+
 # Excel 打开时的临时文件
 ~$*
 

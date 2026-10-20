@@ -53,6 +53,12 @@ const router = createRouter({
       meta: { title: "通知配置" },
     },
     {
+      path: "/schedules",
+      name: "schedules",
+      component: () => import("../views/SchedulesView.vue"),
+      meta: { title: "定时任务" },
+    },
+    {
       // run_id 可能含 "/"（cli 历史批次 reports/run_xxx），用 query 传参规避动态路由歧义；
       // 无 runId 时报告页落「批次列表」选择页，作为侧栏独立入口。
       path: "/report",

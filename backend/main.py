@@ -10,8 +10,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend import config_writer
-from backend.routers import cases, notifications, plans, runs, secrets
+from backend import config_writer, scheduler
+from backend.routers import cases, notifications, plans, runs, schedules, secrets
 from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
@@ -35,7 +35,14 @@ app.include_router(cases.router)
 app.include_router(notifications.router)
 app.include_router(plans.router)
 app.include_router(runs.router)
+app.include_router(schedules.router)
 app.include_router(secrets.router)
+
+
+@app.on_event("startup")
+def _start_scheduler():
+    """服务启动时拉起 Cron 调度线程。"""
+    scheduler.start()
 
 
 @app.get("/api/health", response_model=HealthOut, tags=["系统"], summary="健康检查")

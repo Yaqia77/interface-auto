@@ -212,3 +212,34 @@ export interface WebhookUpdateReq {
   events?: string[];
   enabled?: boolean;
 }
+
+/** 定时任务（/api/schedules） */
+export interface ScheduleItem {
+  id: string;
+  name: string;
+  cron: string;
+  plan_id: string;
+  run_config: Record<string, unknown>;
+  enabled: boolean;
+  last_run_id: string | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScheduleCreateReq {
+  name: string;
+  cron: string;
+  plan_id?: string;
+  run_config?: Record<string, unknown>;
+  enabled?: boolean;
+}
+
+export interface ScheduleUpdateReq {
+  name?: string;
+  cron?: string;
+  plan_id?: string;
+  run_config?: Record<string, unknown>;
+  enabled?: boolean;
+}

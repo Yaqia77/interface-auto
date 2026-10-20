@@ -9,3 +9,4 @@ loguru>=0.7
 fastapi>=0.110
 uvicorn[standard]>=0.29
 python-multipart>=0.0.9
+croniter>=2.0
