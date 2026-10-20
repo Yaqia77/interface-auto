@@ -52,6 +52,12 @@ export interface EnvsResp {
   log?: Record<string, string>;
 }
 
+/** PUT /api/envs 请求体：整体覆盖式保存环境段 */
+export interface EnvsUpdate {
+  default_env: string;
+  envs: EnvInfo[];
+}
+
 /** 编辑用元数据（/api/cases/meta）：下拉候选统一来源 */
 export interface AssertOpInfo {
   op: string;

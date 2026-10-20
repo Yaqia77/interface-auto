@@ -7,11 +7,12 @@
 """
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend import config_writer
 from backend.routers import cases, runs
-from backend.schemas import HealthOut
+from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -65,6 +66,25 @@ def envs():
         "report": cfg.get("report") or {},
         "log": cfg.get("log") or {},
     }
+
+
+_CONFIG_ERROR_STATUS = {"invalid": 400, "not_found": 404, "locked": 409}
+
+
+@app.put("/api/envs", tags=["系统"], summary="保存环境配置（写回 config.yaml 并即时生效）")
+def update_envs(payload: EnvsUpdate):
+    """整体覆盖式写回环境段：行级替换保留注释/其余章节，校验通过才落盘。
+
+    load_config 无缓存，写回后下一次执行/拉取即读到新配置，无需重启。
+    """
+    try:
+        config_writer.save_envs(
+            payload.default_env,
+            [e.model_dump() for e in payload.envs],
+        )
+    except config_writer.ConfigWriteError as e:
+        raise HTTPException(status_code=_CONFIG_ERROR_STATUS.get(e.kind, 400), detail=str(e))
+    return envs()
 
 
 if __name__ == "__main__":

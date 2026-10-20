@@ -93,3 +93,20 @@ class HealthOut(BaseModel):
     status: str
     default_env: str | None = None
     cases_file_exists: bool
+
+
+class EnvItem(BaseModel):
+    """单个环境的可编辑配置（写回 config.yaml 的 env 段）。"""
+
+    name: str = Field(description="环境名（唯一，YAML key）")
+    base_url: str = Field(description="基础 URL，必须以 http(s):// 开头")
+    timeout: float | None = Field(default=None, description="秒，正数；留空用框架默认")
+    verify_ssl: bool = Field(default=True, description="是否校验 TLS 证书")
+    default_headers: dict | None = Field(default=None, description="环境默认请求头（用例头优先）")
+
+
+class EnvsUpdate(BaseModel):
+    """整体覆盖式保存环境配置（镜像当前 env 段，含默认环境）。"""
+
+    default_env: str = Field(description="默认环境名，必须是 envs 之一")
+    envs: list[EnvItem] = Field(description="完整环境列表（至少一个）")

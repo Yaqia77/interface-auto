@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, EnvsResp, RunCasesResp, RunCaseDetail, RunItem } from "../types";
+import type { CaseItem, CasePage, CaseMeta, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -24,6 +24,10 @@ export const api = {
   }) => http.get<CasePage>("/cases", { params }).then((r) => r.data),
 
   listEnvs: () => http.get<EnvsResp>("/envs").then((r) => r.data),
+
+  /** 保存环境配置（写回 config.yaml，下一次执行/拉取即生效） */
+  updateEnvs: (body: EnvsUpdate) =>
+    http.put<EnvsResp>("/envs", body).then((r) => r.data),
 
   /** 更新用例（只传改动字段；后端写回 Excel，校验不外溢） */
   updateCase: (caseId: string, changes: Record<string, unknown>) =>
