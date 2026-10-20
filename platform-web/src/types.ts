@@ -39,11 +39,17 @@ export interface RunItem {
 export interface EnvInfo {
   name: string;
   base_url: string | null;
+  timeout?: number | null;
+  verify_ssl?: boolean;
+  default_headers?: Record<string, string>;
 }
 
 export interface EnvsResp {
   default_env: string | null;
   envs: EnvInfo[];
+  secret_vars_file?: string | null;
+  report?: Record<string, boolean>;
+  log?: Record<string, string>;
 }
 
 /** 编辑用元数据（/api/cases/meta）：下拉候选统一来源 */

@@ -44,15 +44,26 @@ def health():
     )
 
 
-@app.get("/api/envs", tags=["系统"], summary="可用环境列表（前端环境下拉）")
+@app.get("/api/envs", tags=["系统"], summary="环境列表与配置详情（前端下拉/环境页）")
 def envs():
     cfg = load_config()
+    env_items = []
+    for name, section in (cfg.get("env") or {}).items():
+        section = section or {}
+        env_items.append({
+            "name": name,
+            "base_url": section.get("base_url"),
+            "timeout": section.get("timeout"),
+            "verify_ssl": section.get("verify_ssl", True),
+            # default_headers 来自 config.yaml（开发者可控），值为变量引用或静态头，无明文凭证
+            "default_headers": section.get("default_headers") or {},
+        })
     return {
         "default_env": cfg.get("default_env"),
-        "envs": [
-            {"name": name, "base_url": (section or {}).get("base_url")}
-            for name, section in (cfg.get("env") or {}).items()
-        ],
+        "envs": env_items,
+        "secret_vars_file": cfg.get("secret_vars_file"),
+        "report": cfg.get("report") or {},
+        "log": cfg.get("log") or {},
     }
 
 

@@ -23,6 +23,12 @@ const router = createRouter({
       meta: { title: "执行中心" },
     },
     {
+      path: "/envs",
+      name: "envs",
+      component: () => import("../views/EnvView.vue"),
+      meta: { title: "环境配置" },
+    },
+    {
       // run_id 可能含 "/"（cli 历史批次 reports/run_xxx），用 query 传参规避动态路由歧义
       path: "/report",
       name: "report",

@@ -32,6 +32,7 @@ onMounted(async () => {
         <el-menu-item index="/dashboard">🏠 工作台</el-menu-item>
         <el-menu-item index="/cases">📋 用例管理</el-menu-item>
         <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
+        <el-menu-item index="/envs">🌐 环境配置</el-menu-item>
       </el-menu>
       <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>
     </el-aside>
