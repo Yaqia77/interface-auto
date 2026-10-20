@@ -15,7 +15,7 @@ onMounted(async () => {
   try {
     const [c, r, e] = await Promise.all([
       api.listCases({}),
-      api.listRuns(10),
+      api.listRuns(15),
       api.listEnvs(),
     ]);
     cases.value = c.items;
@@ -58,6 +58,17 @@ const finishedStats = computed(() => {
 const statusType = (s: string) =>
   (({ running: "warning", passed: "success", failed: "danger", error: "danger", cancelled: "info" } as Record<string, any>)[s] ?? "info");
 
+/** 批次趋势条：取最近 12 次按时间旧→新排列，颜色即结果 */
+const TREND_COLOR: Record<string, string> = {
+  passed: "#67c23a", failed: "#f56c6c", broken: "#f56c6c", error: "#e6a23c",
+  cancelled: "#909399", running: "#409eff", unknown: "#c0c4cc",
+};
+const trend = computed(() =>
+  runs.value.slice(0, 12).reverse().map((r) => ({
+    ...r,
+    color: TREND_COLOR[r.status] ?? "#c0c4cc",
+  })));
+
 function goReport(run: RunItem) {
   if (run.source === "api" && ["passed", "failed"].includes(run.status)) router.push({ path: "/report", query: { runId: run.run_id } });
   else if (run.report_dir) router.push({ path: "/report", query: { runId: run.run_id } });
@@ -94,6 +105,26 @@ function goReport(run: RunItem) {
         </el-card>
       </el-col>
     </el-row>
+
+    <el-card shadow="never" style="margin-top: 12px" header="批次趋势（最近 12 次，旧 → 新）">
+      <div class="trend-row">
+        <el-tooltip v-for="t in trend" :key="t.run_id" placement="top">
+          <template #content>
+            {{ t.run_id }}<br />{{ t.status }} · {{ t.started_at ?? "—" }}
+            <template v-if="t.finished_at"> → {{ t.finished_at }}</template>
+          </template>
+          <div class="trend-bar" :style="{ background: t.color }" @click="goReport(t)" />
+        </el-tooltip>
+        <span v-if="!trend.length" style="color: #909399; font-size: 12px">暂无批次记录</span>
+        <div class="trend-legend">
+          <span><i style="background: #67c23a" />passed</span>
+          <span><i style="background: #f56c6c" />failed</span>
+          <span><i style="background: #e6a23c" />error</span>
+          <span><i style="background: #909399" />cancelled</span>
+          <span><i style="background: #c0c4cc" />unknown</span>
+        </div>
+      </div>
+    </el-card>
 
     <el-row :gutter="12" style="margin-top: 12px">
       <el-col :span="8">
@@ -148,4 +179,9 @@ function goReport(run: RunItem) {
 .bar-track { flex: 1; height: 12px; background: #f0f2f5; border-radius: 6px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }
 .bar-num { width: 26px; text-align: right; font-size: 12px; color: #606266; }
+.trend-row { display: flex; align-items: flex-end; gap: 6px; min-height: 42px; }
+.trend-bar { width: 26px; height: 30px; border-radius: 4px 4px 2px 2px; cursor: pointer; transition: transform 0.15s ease, opacity 0.15s ease; }
+.trend-bar:hover { transform: scaleY(1.25); opacity: 0.85; }
+.trend-legend { margin-left: auto; display: flex; gap: 12px; font-size: 12px; color: #909399; }
+.trend-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
 </style>
