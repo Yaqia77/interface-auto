@@ -2,6 +2,7 @@
 /** 批次报告页（按原型重构）：无 runId 时落批次列表；有则展示批次概览 + 用例明细筛选 + 失败归类 + 执行详情抽屉 + Allure + 与上批次对比。 */
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { RunCaseDetail, RunCaseSummary, RunItem } from "../types";
 
@@ -291,6 +292,58 @@ const durFmt = (ms: number) => (ms / 1000).toFixed(2) + "s";
 const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 const strVal = (v: unknown) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
 
+/* ================= 导出 PDF（新窗口自包含打印文档，零后端） ================= */
+const esc = (v: unknown): string =>
+  (v == null ? "" : String(v)).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+
+function exportPdf() {
+  if (!cases.value.length) { ElMessage.info("无可导出的用例明细"); return; }
+  const rows = [...cases.value].sort(
+    (a, b) => (FAILED_STATUSES.includes(a.status) ? 0 : 1) - (FAILED_STATUSES.includes(b.status) ? 0 : 1)
+      || a.case_id.localeCompare(b.case_id));
+  const stColor = (s: string) =>
+    (({ passed: "#67c23a", failed: "#f56c6c", broken: "#e6a23c", skipped: "#909399" } as Record<string, string>)[s] ?? "#606266");
+  const a = (batch.value?.args ?? {}) as Record<string, unknown>;
+  const picked = Array.isArray(a.cases) ? (a.cases as unknown[]).length : 0;
+  const scope = picked ? `勾选 ${picked} 条`
+    : [a.module && `模块=${a.module}`, a.priority && `优先级=${a.priority}`, a.keyword && `关键字=${a.keyword}`].filter(Boolean).join(" · ") || "全量";
+  const html = `<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>批次报告 ${esc(runId.value)}</title>
+<style>
+*{box-sizing:border-box}body{font-family:'Segoe UI','Microsoft YaHei',sans-serif;color:#303133;margin:24px;font-size:13px}
+h1{font-size:20px;margin:0 0 4px}.meta{color:#909399;font-size:12px;margin-bottom:6px}
+.kpis{display:flex;gap:12px;margin:16px 0 18px}.kpi{flex:1;border:1px solid #ebeef5;border-radius:8px;padding:12px;text-align:center}
+.kpi .n{font-size:24px;font-weight:700}.kpi .l{color:#909399;font-size:12px}.ok{color:#67c23a}.fail{color:#f56c6c}
+table{width:100%;border-collapse:collapse;font-size:12px}th,td{border:1px solid #ebeef5;padding:6px 8px;text-align:left;vertical-align:top}
+th{background:#f5f7fa}.tag{display:inline-block;padding:1px 8px;border-radius:10px;color:#fff;font-size:11px}
+.mono{font-family:Consolas,monospace}tr{page-break-inside:avoid}
+h2{font-size:15px;margin:20px 0 8px;border-left:3px solid #409eff;padding-left:8px}
+.foot{margin-top:18px;color:#c0c4cc;font-size:11px;text-align:center}
+@media print{body{margin:0}}
+</style></head><body>
+<h1>接口自动化 · 批次报告</h1>
+<div class="meta">批次 ${esc(runId.value)} · 来源 ${esc(batch.value?.source ?? "cli")}${a.env ? " · 环境 " + esc(String(a.env)) : ""} · 范围 ${esc(scope)}</div>
+<div class="meta">开始 ${esc(batch.value?.started_at ?? "—")}${batch.value?.finished_at ? " → " + esc(batch.value.finished_at) : ""} · 导出于 ${esc(new Date().toLocaleString("zh-CN"))}</div>
+<div class="kpis">
+<div class="kpi"><div class="n">${total.value}</div><div class="l">用例总数</div></div>
+<div class="kpi"><div class="n ok">${stats.value.passed ?? 0}</div><div class="l">通过</div></div>
+<div class="kpi"><div class="n fail">${failedCount.value}</div><div class="l">失败</div></div>
+<div class="kpi"><div class="n" style="color:${passRate.value >= 100 ? "#67c23a" : passRate.value >= 60 ? "#e6a23c" : "#f56c6c"}">${passRate.value}%</div><div class="l">通过率</div></div>
+</div>
+<h2>用例明细（共 ${rows.length} 条，失败置顶）</h2>
+<table><thead><tr><th>状态</th><th>用例</th><th>优先级</th><th>结果摘要</th><th>耗时</th></tr></thead><tbody>
+${rows.map((r) => `<tr><td><span class="tag" style="background:${stColor(r.status)}">${esc(r.status)}</span></td><td><div class="mono">${esc(r.case_id)}</div><div>${esc(r.name)}</div></td><td>${esc(r.priority)}</td><td>${esc(r.summary || r.status)}</td><td>${durFmt(r.duration_ms)}</td></tr>`).join("")}
+</tbody></table>
+<div class="foot">由 interface-auto 测试平台导出</div>
+</body></html>`;
+  const w = window.open("", "_blank");
+  if (!w) { ElMessage.warning("浏览器拦截了新窗口，请允许弹出后重试"); return; }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
+  w.focus();
+  setTimeout(() => { try { w.print(); } catch { /* 用户可手动打印 */ } }, 400);
+}
+
 onMounted(load);
 // 同一 /report 路由下 query.runId 变化（列表→详情、重跑回跳）不会重新挂载，靠 watch 重载
 watch(runId, () => load());
@@ -345,6 +398,7 @@ watch(runId, () => load());
         <span v-if="batch?.started_at" class="dim">{{ batch.started_at }}</span>
       </div>
       <div class="batch-head-right">
+        <el-button size="small" plain :disabled="!cases.length" @click="exportPdf">🖨 导出 PDF</el-button>
         <el-button type="danger" plain size="small" :disabled="!batch" @click="rerunBatch">⟳ 重跑该批次条件</el-button>
       </div>
     </div>
