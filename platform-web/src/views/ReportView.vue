@@ -23,6 +23,43 @@ const detailVisible = ref(false);
 const detail = ref<RunCaseDetail | null>(null);
 const detailLoading = ref(false);
 
+/* ================= 明细筛选（纯前端过滤，数据已在内存） ================= */
+const filterStatus = ref<string[]>([]);
+const filterPrio = ref<string[]>([]);
+const filterKw = ref("");
+const FAILED_STATUSES = ["failed", "broken"];
+const statusOptions = ["passed", "failed", "broken", "skipped"];
+const prioOptions = computed(() => [...new Set(cases.value.map((c) => c.priority))].sort());
+const hasFilter = computed(
+  () => filterStatus.value.length > 0 || filterPrio.value.length > 0 || filterKw.value.trim() !== "");
+
+const filteredCases = computed(() => {
+  const kw = filterKw.value.trim().toLowerCase();
+  return cases.value.filter((c) => {
+    if (filterStatus.value.length && !filterStatus.value.includes(c.status)) return false;
+    if (filterPrio.value.length && !filterPrio.value.includes(c.priority)) return false;
+    if (kw && !(c.case_id.toLowerCase().includes(kw) || (c.name ?? "").toLowerCase().includes(kw))) return false;
+    return true;
+  });
+});
+
+/** 快捷仅看失败/异常：置状态筛选为 failed+broken（再次点击取消） */
+function toggleOnlyFailed() {
+  const isOnlyFailed = filterStatus.value.length === 2 && FAILED_STATUSES.every((s) => filterStatus.value.includes(s));
+  filterStatus.value = isOnlyFailed ? [] : [...FAILED_STATUSES];
+}
+
+function clearFilter() {
+  filterStatus.value = [];
+  filterPrio.value = [];
+  filterKw.value = "";
+}
+
+/** 单用例重跑：用编号作关键字精确命中该条，跳执行中心预填（复用现有 keyword 筛选） */
+function rerunCase(row: RunCaseSummary) {
+  router.push({ path: "/execution", query: { keyword: row.case_id } });
+}
+
 const statusType = (s: string) =>
   (({ passed: "success", failed: "danger", broken: "warning", skipped: "info" } as Record<string, any>)[s] ?? "info");
 
@@ -79,7 +116,19 @@ onMounted(load);
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
       <el-tab-pane label="用例明细（平台视图）" name="detail">
         <el-card shadow="never">
-          <el-table :data="cases" v-loading="loading" size="small" row-key="case_id">
+          <div class="filter-bar">
+            <el-select v-model="filterStatus" multiple collapse-tags placeholder="全部状态" style="width: 180px">
+              <el-option v-for="s in statusOptions" :key="s" :label="s" :value="s" />
+            </el-select>
+            <el-select v-model="filterPrio" multiple collapse-tags placeholder="全部优先级" style="width: 150px">
+              <el-option v-for="p in prioOptions" :key="p" :label="p" :value="p" />
+            </el-select>
+            <el-input v-model="filterKw" placeholder="编号/名称" clearable style="width: 200px" />
+            <el-button @click="toggleOnlyFailed">仅看失败</el-button>
+            <el-button v-if="hasFilter" text type="primary" @click="clearFilter">清除筛选</el-button>
+            <span class="filter-count">显示 {{ filteredCases.length }} / 共 {{ total }} 条</span>
+          </div>
+          <el-table :data="filteredCases" v-loading="loading" size="small" row-key="case_id">
             <el-table-column label="状态" width="90">
               <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
             </el-table-column>
@@ -97,14 +146,23 @@ onMounted(load);
                 <span v-else style="color: #909399">—</span>
               </template>
             </el-table-column>
-            <el-table-column label="操作" width="110">
+            <el-table-column label="操作" width="190">
               <template #default="{ row }">
                 <el-button size="small" text type="primary" @click="openDetail(row)">请求/响应</el-button>
+                <el-button
+                  v-if="row.status === 'failed' || row.status === 'broken'"
+                  size="small"
+                  text
+                  type="warning"
+                  @click="rerunCase(row)"
+                >
+                  重跑此用例
+                </el-button>
               </template>
             </el-table-column>
           </el-table>
           <div style="margin-top: 8px; color: #909399; font-size: 12px">
-            共 {{ total }} 条 ｜ 数据源：批次 allure-results ｜ Authorization / 用户 ID / 预签名已由后端统一掩码
+            共 {{ total }} 条{{ hasFilter ? "（已按条件筛选）" : "" }} ｜ 数据源：批次 allure-results ｜ Authorization / 用户 ID / 预签名已由后端统一掩码
           </div>
         </el-card>
       </el-tab-pane>
@@ -153,6 +211,8 @@ onMounted(load);
 
 <style scoped>
 .mono { font-family: Consolas, Monaco, monospace; }
+.filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.filter-count { margin-left: auto; color: #909399; font-size: 12px; }
 .err { color: #f56c6c; font-size: 12px; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .json { background: #f8f9fb; border: 1px solid #e4e7ed; border-radius: 6px; padding: 10px 12px; font-family: Consolas, Monaco, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 300px; overflow: auto; }
 .fail-line { background: #fef0f0; border: 1px solid #fde2e2; border-radius: 4px; padding: 8px 12px; color: #f56c6c; font-size: 12px; margin-bottom: 12px; white-space: pre-wrap; word-break: break-all; }
