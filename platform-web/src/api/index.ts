@@ -58,6 +58,8 @@ export const api = {
     module?: string;
     priority?: string;
     keyword?: string;
+    cases?: string[];
+    vars?: Record<string, unknown>;
     file?: string;
   }) => http.post<RunItem>("/runs", body).then((r) => r.data),
 

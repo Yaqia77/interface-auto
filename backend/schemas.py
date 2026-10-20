@@ -74,6 +74,8 @@ class RunCreate(BaseModel):
     module: str | None = Field(default=None, description="按模块筛选（包含匹配）")
     priority: str | None = Field(default=None, description="按优先级筛选，逗号分隔，如 P0,P1")
     keyword: str | None = Field(default=None, description="关键字筛选（编号/接口名/描述/URL）")
+    cases: list[str] | None = Field(default=None, description="按用例编号精确选择（优先于 module/priority/keyword）")
+    vars: dict[str, Any] | None = Field(default=None, description="运行前变量覆盖（键值映射，覆盖同名 secret/Excel/YAML 变量）")
     file: str = Field(default="data/api_cases.xlsx", description="用例文件或目录（相对项目根）")
 
 

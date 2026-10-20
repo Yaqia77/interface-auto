@@ -23,7 +23,18 @@ const runStatusType = (s: string) =>
   (({ passed: "success", failed: "danger", error: "danger", running: "warning", pending: "info", broken: "warning" } as Record<string, any>)[s] ?? "info");
 function argsText(a: Record<string, unknown> | null): string {
   if (!a) return "—";
-  const parts = ["env", "module", "priority", "keyword"].map((k) => a[k]).filter(Boolean);
+  const parts: string[] = [];
+  if (a.env) parts.push(`env=${a.env}`);
+  const picked = Array.isArray(a.cases) ? a.cases : [];
+  if (picked.length) {
+    parts.push(`勾选 ${picked.length} 条`);
+  } else {
+    if (a.module) parts.push(`模块=${a.module}`);
+    if (a.priority) parts.push(`P=${a.priority}`);
+    if (a.keyword) parts.push(`词=${a.keyword}`);
+  }
+  const v = a.vars && typeof a.vars === "object" ? Object.keys(a.vars as object) : [];
+  if (v.length) parts.push(`覆盖 ${v.length} 变量`);
   return parts.length ? parts.join(" · ") : "全量";
 }
 async function loadRunList() {

@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--module", default=None, help="按模块名筛选（包含匹配）")
     parser.add_argument("--priority", default=None, help="按优先级筛选，逗号分隔，如 P0,P1")
     parser.add_argument("--keyword", default=None, help="按关键字筛选（用例编号/接口名称/用例描述/URL）")
+    parser.add_argument("--cases", default=None, help="按用例编号精确选择，逗号分隔（优先于 --module/--priority/--keyword）")
+    parser.add_argument("--vars", default=None, help="运行前变量覆盖，JSON 字符串")
     parser.add_argument("--no-html", action="store_true", help="不生成 pytest-html 报告")
     parser.add_argument("--no-allure", action="store_true", help="不生成 allure 结果")
     return parser.parse_args()
@@ -57,6 +59,10 @@ def main() -> None:
         pytest_args += [f"--priority={args.priority}"]
     if args.keyword:
         pytest_args += [f"--keyword={args.keyword}"]
+    if args.cases:
+        pytest_args += [f"--cases={args.cases}"]
+    if args.vars:
+        pytest_args += [f"--vars={args.vars}"]
     if report_cfg.get("html", True) and not args.no_html:
         pytest_args += [f"--html={report_dir / 'report.html'}", "--self-contained-html"]
     if report_cfg.get("allure", True) and not args.no_allure:

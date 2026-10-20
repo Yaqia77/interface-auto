@@ -159,6 +159,13 @@ def create_run(body: RunCreate):
         cmd.append(f"--priority={body.priority}")
     if body.keyword:
         cmd.append(f"--keyword={body.keyword}")
+    if body.cases:
+        # 去重去空，保持前端传入顺序（但实际执行序以 Excel 行序为准，见 conftest）
+        ids = list(dict.fromkeys(c for c in body.cases if c))
+        if ids:
+            cmd.append("--cases=" + ",".join(ids))
+    if body.vars:
+        cmd.append("--vars=" + json.dumps(body.vars, ensure_ascii=False))
 
     run_id = f"api_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     rec = {

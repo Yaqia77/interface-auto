@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 执行中心：发起批次 → 轮询日志 → 查看/打开中文 Allure 报告。 */
-import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
@@ -31,7 +31,69 @@ function clearCarried() {
   form.priority = "";
   form.keyword = "";
   carried.value = "";
+  rangeMode.value = "filter";
   router.replace({ path: "/execution" });
+}
+
+/* ================= 范围模式：按条件筛选 / 勾选用例（树形多选） ================= */
+const rangeMode = ref<"filter" | "pick">("filter");
+interface TreeNode { id: string; label: string; module?: string; priority?: string; children?: TreeNode[] }
+const treeRef = ref();
+const treeData = ref<TreeNode[]>([]);
+const treeLoading = ref(false);
+const treeFilter = ref("");
+const checkedIds = ref<string[]>([]);
+
+async function loadTree() {
+  if (treeData.value.length) return;      // 首次切到勾选模式才加载，后续复用
+  treeLoading.value = true;
+  try {
+    const resp = await api.listCases({ run: true });   // 仅列出已启用（run=Y）的用例
+    const byMod = new Map<string, TreeNode[]>();
+    for (const c of resp.items) {
+      const leaf: TreeNode = { id: c.case_id, label: `${c.case_id} · ${c.api_name}`, module: c.module, priority: c.priority };
+      if (!byMod.has(c.module)) byMod.set(c.module, []);
+      byMod.get(c.module)!.push(leaf);
+    }
+    treeData.value = [...byMod.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0], "zh"))
+      .map(([mod, children]) => ({ id: `mod:${mod}`, label: `${mod}（${children.length}）`, module: mod, children }));
+  } finally {
+    treeLoading.value = false;
+  }
+}
+
+function filterNode(q: string, data: TreeNode): boolean {
+  if (!q) return true;
+  const s = q.toLowerCase();
+  return data.label.toLowerCase().includes(s) || (data.module ?? "").toLowerCase().includes(s);
+}
+
+/** 收集已勾选的叶子（用例）id；模块父节点自动排除 */
+function collectIds(): string[] {
+  const nodes: TreeNode[] = treeRef.value?.getCheckedNodes(true) ?? [];
+  return nodes.filter((n) => !n.id.startsWith("mod:")).map((n) => n.id);
+}
+function onCheck() {
+  checkedIds.value = collectIds();
+}
+watch(treeFilter, (v) => treeRef.value?.filter(v));
+watch(rangeMode, (m) => { if (m === "pick") loadTree(); });
+const pickedCount = computed(() => checkedIds.value.length);
+
+/* ================= 运行前变量覆盖 ================= */
+interface VarRow { key: string; value: string }
+const varRows = ref<VarRow[]>([]);
+const advOpen = ref<string[]>([]);
+function addVarRow() { varRows.value.push({ key: "", value: "" }); }
+function delVarRow(i: number) { varRows.value.splice(i, 1); }
+function buildVars(): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const r of varRows.value) {
+    const k = r.key.trim();
+    if (k) o[k] = r.value;
+  }
+  return o;
 }
 
 const statusType = (s: string) =>
@@ -42,15 +104,25 @@ async function loadRuns() {
 }
 
 async function start() {
+  const body: Parameters<typeof api.createRun>[0] = { env: form.env || undefined, file: form.file };
+  if (rangeMode.value === "pick") {
+    const ids = collectIds();
+    if (!ids.length) {
+      ElMessage.warning("请至少勾选一条用例（或切回“按条件筛选”）");
+      return;
+    }
+    body.cases = ids;
+  } else {
+    body.priority = form.priority || undefined;
+    body.module = form.module || undefined;
+    body.keyword = form.keyword || undefined;
+  }
+  const vars = buildVars();
+  if (Object.keys(vars).length) body.vars = vars;
+
   launching.value = true;
   try {
-    const run = await api.createRun({
-      env: form.env || undefined,
-      priority: form.priority || undefined,
-      module: form.module || undefined,
-      keyword: form.keyword || undefined,
-      file: form.file,
-    });
+    const run = await api.createRun(body);
     current.value = run;
     logText.value = "";
     ElMessage.success(`批次已受理：${run.run_id}`);
@@ -156,26 +228,72 @@ onBeforeUnmount(stopPolling);
               </div>
             </template>
           </el-alert>
-          <el-form label-width="80px" @submit.prevent>
+          <el-form label-width="72px" @submit.prevent>
             <el-form-item label="环境">
               <el-select v-model="form.env" style="width: 100%">
                 <el-option v-for="e in envs" :key="e.name" :label="`${e.name}（${e.base_url}）`" :value="e.name" />
               </el-select>
             </el-form-item>
-            <el-form-item label="优先级">
-              <el-input v-model="form.priority" placeholder="如 P0 或 P0,P1（留空=全量）" />
+            <el-form-item label="范围">
+              <el-radio-group v-model="rangeMode" size="small">
+                <el-radio-button label="filter">按条件筛选</el-radio-button>
+                <el-radio-button label="pick">勾选用例</el-radio-button>
+              </el-radio-group>
             </el-form-item>
-            <el-form-item label="模块">
-              <el-input v-model="form.module" placeholder="包含匹配，留空不筛选" />
-            </el-form-item>
-            <el-form-item label="关键字">
-              <el-input v-model="form.keyword" placeholder="编号/接口名/描述/URL" />
-            </el-form-item>
+
+            <template v-if="rangeMode === 'filter'">
+              <el-form-item label="优先级">
+                <el-input v-model="form.priority" placeholder="如 P0 或 P0,P1（留空=全量）" />
+              </el-form-item>
+              <el-form-item label="模块">
+                <el-input v-model="form.module" placeholder="包含匹配，留空不筛选" />
+              </el-form-item>
+              <el-form-item label="关键字">
+                <el-input v-model="form.keyword" placeholder="编号/接口名/描述/URL" />
+              </el-form-item>
+            </template>
+            <div v-else class="pick-wrap">
+              <div class="pick-bar">
+                <el-input v-model="treeFilter" size="small" placeholder="过滤模块/编号/接口名" clearable />
+                <span class="pick-count">已选 {{ pickedCount }} 条</span>
+              </div>
+              <el-tree
+                ref="treeRef"
+                v-loading="treeLoading"
+                :data="treeData"
+                show-checkbox
+                node-key="id"
+                :props="{ children: 'children', label: 'label' }"
+                :filter-node-method="filterNode"
+                default-expand-all
+                class="pick-tree"
+                @check="onCheck"
+              />
+              <div class="pick-tip">勾选模式使用默认用例文件，仅列已启用（run=Y）用例；执行顺序按用例依赖（Excel 行序）。</div>
+            </div>
+
             <el-form-item label="用例文件">
-              <el-input v-model="form.file" />
+              <el-input v-model="form.file" :disabled="rangeMode === 'pick'" />
             </el-form-item>
-            <el-button type="primary" :loading="launching" style="width: 100%" @click="start">
-              ▶ 开始执行
+
+            <el-collapse v-model="advOpen" class="vars-collapse">
+              <el-collapse-item name="vars">
+                <template #title>
+                  变量覆盖（可选，运行前生效）
+                  <el-tag v-if="varRows.length" size="small" type="warning" style="margin-left: 6px">{{ varRows.length }}</el-tag>
+                </template>
+                <div v-for="(r, i) in varRows" :key="i" class="var-row">
+                  <el-input v-model="r.key" size="small" placeholder="变量名" />
+                  <el-input v-model="r.value" size="small" placeholder="值" />
+                  <el-button size="small" text type="danger" @click="delVarRow(i)">删</el-button>
+                </div>
+                <el-button size="small" plain @click="addVarRow">+ 添加变量</el-button>
+                <div class="vars-hint">覆盖同名 secret/Excel/YAML 变量（如 base_url、token）；运行时提取值仍优先。</div>
+              </el-collapse-item>
+            </el-collapse>
+
+            <el-button type="primary" :loading="launching" style="width: 100%; margin-top: 10px" @click="start">
+              ▶ 开始执行<template v-if="rangeMode === 'pick' && pickedCount">（{{ pickedCount }} 条）</template>
             </el-button>
           </el-form>
         </el-card>
@@ -270,4 +388,16 @@ onBeforeUnmount(stopPolling);
   font-family: Consolas, Monaco, monospace; font-size: 12px; line-height: 1.6;
   height: 300px; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 0;
 }
+.pick-wrap { margin-bottom: 12px; }
+.pick-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.pick-count { font-size: 12px; color: #409eff; white-space: nowrap; }
+.pick-tree {
+  max-height: 300px; overflow: auto; border: 1px solid #ebeef5; border-radius: 6px; padding: 4px;
+}
+.pick-tip { margin-top: 6px; font-size: 12px; color: #909399; line-height: 1.5; }
+.vars-collapse { margin-top: 4px; }
+.vars-collapse :deep(.el-collapse-item__header) { font-size: 13px; height: 34px; line-height: 34px; }
+.var-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+.var-row .el-input { flex: 1; }
+.vars-hint { margin-top: 6px; font-size: 12px; color: #909399; line-height: 1.5; }
 </style>

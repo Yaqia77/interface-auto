@@ -1,4 +1,5 @@
 """pytest 配置：自定义命令行参数、用例加载、Session 级fixture。"""
+import json
 import sys
 from pathlib import Path
 
@@ -23,6 +24,24 @@ def pytest_addoption(parser):
     parser.addoption("--module", default=None, help="按模块名筛选（包含匹配）")
     parser.addoption("--priority", default=None, help="按优先级筛选，逗号分隔，如 P0,P1")
     parser.addoption("--keyword", default=None, help="按关键字筛选（匹配 用例编号/接口名称/用例描述/URL）")
+    parser.addoption("--cases", default=None, help="按用例编号精确选择，逗号分隔（优先于 --module/--priority/--keyword）")
+    parser.addoption("--vars", default=None, help='运行前变量覆盖，JSON 对象字符串（覆盖同名 secret/Excel/YAML 变量，优先级低于运行时提取）')
+
+
+def _parse_vars(raw):
+    """解析 --vars JSON 为 dict；非法输入直接终止收集期报错，避免静默忽略覆盖。"""
+    if not raw:
+        return {}
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        raise pytest.UsageError(f"--vars 不是合法 JSON：{raw!r}")
+    if not isinstance(obj, dict):
+        raise pytest.UsageError("--vars 必须是 JSON 对象（键值映射）")
+    out = {}
+    for k, v in obj.items():
+        out[str(k)] = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+    return out
 
 
 def _load_cases(file_arg: str):
@@ -41,10 +60,17 @@ def pytest_generate_tests(metafunc):
     module = metafunc.config.getoption("--module")
     priority = metafunc.config.getoption("--priority")
     keyword = metafunc.config.getoption("--keyword")
+    cases_opt = metafunc.config.getoption("--cases")
     pri_set = {p.strip().upper() for p in priority.split(",") if p.strip()} if priority else None
+    id_set = {c.strip() for c in cases_opt.split(",") if c.strip()} if cases_opt else None
 
     selected = []
     for case in data.cases:
+        if id_set is not None:
+            # 精确选择：仅按编号命中，保持 Excel 行序（依赖顺序优先于勾选顺序）
+            if case.case_id in id_set:
+                selected.append(case)
+            continue
         if module and module not in case.module:
             continue
         if pri_set and case.priority.upper() not in pri_set:
@@ -56,7 +82,8 @@ def pytest_generate_tests(metafunc):
         selected.append(case)
 
     if not selected:
-        raise pytest.UsageError("没有匹配到任何用例，请检查 --file/--module/--priority/--keyword 筛选条件")
+        hint = "--cases" if id_set is not None else "--file/--module/--priority/--keyword"
+        raise pytest.UsageError(f"没有匹配到任何用例，请检查 {hint} 筛选条件")
     metafunc.parametrize("api_case", selected, ids=[c.case_id for c in selected])
 
 
@@ -88,6 +115,9 @@ def context(app_config, excel_data):
         secret_path = ROOT / secret_path
     merged_vars = dict(excel_data.variables)
     merged_vars.update(load_secret_vars(secret_path))  # 凭证文件覆盖用例文件同名变量
+    overrides = _parse_vars(request.config.getoption("--vars"))
+    if overrides:
+        merged_vars.update(overrides)  # 运行前覆盖：高于 secret/Excel/YAML，低于运行时提取
     return Context(yaml_vars, merged_vars)
 
 
