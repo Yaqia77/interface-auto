@@ -52,8 +52,9 @@ interface AssertRow { op: string; path: string; expected: string }
 
 const editVisible = ref(false);
 const saving = ref(false);
-const editing = ref<CaseItem | null>(null);   // 打开时的原始行（差分基准；新增模式为 null）
+const editing = ref<CaseItem | null>(null);   // 打开时的原始行（差分基准；新增/复制模式为 null）
 const mode = ref<"edit" | "create">("edit");
+const copyFrom = ref("");                      // 复制来源编号（仅提示用）
 
 const form = reactive({
   case_id: "",
@@ -190,6 +191,7 @@ function openEdit(row: CaseItem) {
 function openCreate() {
   mode.value = "create";
   editing.value = null;
+  copyFrom.value = "";
   Object.assign(form, {
     case_id: "", module: "", api_name: "", case_desc: "", priority: "P2", run: true,
     method: "GET", url: "", timeout: "", body: "",
@@ -199,6 +201,15 @@ function openCreate() {
   extRows.value = [];
   asrtRows.value = [{ op: "eq", path: "status_code", expected: "200" }];
   editVisible.value = true;
+}
+
+/** 复制：按编辑态预填全字段后切到新增态，编号置空强制重新命名 */
+function openCopy(row: CaseItem) {
+  openEdit(row);
+  mode.value = "create";
+  editing.value = null;
+  copyFrom.value = row.case_id;
+  form.case_id = "";
 }
 
 /** 采集当前抽屉表单为完整用例对象（新增用）；校验失败返回 null */
@@ -407,9 +418,10 @@ onMounted(async () => {
             <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="130">
+        <el-table-column label="操作" width="170">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
+            <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
             <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
               <template #reference>
                 <el-button size="small" text type="danger">删除</el-button>
@@ -424,12 +436,12 @@ onMounted(async () => {
     </el-card>
 
     <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
-    <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? '新增用例' : `编辑用例 ${editing?.case_id ?? ''}`">
+    <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? (copyFrom ? '复制新增用例' : '新增用例') : `编辑用例 ${editing?.case_id ?? ''}`">
       <el-form label-width="90px" @submit.prevent>
         <el-divider content-position="left">基本信息</el-divider>
         <el-form-item label="用例编号">
           <el-input v-model="form.case_id" :disabled="mode === 'edit'" class="mono"
-                    placeholder="唯一编号，如 album_list_002（创建后不可改）" />
+                    :placeholder="copyFrom ? `新编号（原 ${copyFrom} 的配置已预填）` : '唯一编号，如 album_list_002（创建后不可改）'" />
         </el-form-item>
         <el-form-item label="模块">
           <el-select v-model="form.module" filterable allow-create default-first-option placeholder="选择或输入新模块" style="width: 100%">
@@ -519,7 +531,7 @@ onMounted(async () => {
         <el-button size="small" @click="asrtRows.push({ op: 'eq', path: '', expected: '' })">＋ 添加断言</el-button>
 
         <div class="hint" style="margin: 14px 0 10px">
-          <template v-if="mode === 'create'">保存后追加为 data/api_cases.xlsx 末行；后端跑全文件格式校验，不通过不落盘。</template>
+          <template v-if="mode === 'create'">保存后追加为 data/api_cases.xlsx 末行{{ copyFrom ? "（复制自 " + copyFrom + "，作为全新用例）" : "" }}；后端跑全文件格式校验，不通过不落盘。</template>
           <template v-else>保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端跑全文件格式校验，不通过不落盘。</template>
         </div>
         <el-button @click="editVisible = false">取消</el-button>
