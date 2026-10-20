@@ -35,6 +35,8 @@ def test_api(api_case, executor, context):
             _attach(result.request_snapshot, f"请求报文 {api_case.method} {api_case.url}")
         if result.response_snapshot:
             _attach(result.response_snapshot, "响应报文")
+        if result.assertions:
+            _attach_assertions(result.assertions)
 
     if not result.ok:
         raise AssertionError(result.error)
@@ -44,5 +46,25 @@ def _attach(snapshot: dict, name: str):
     allure.attach(
         json.dumps(snapshot, ensure_ascii=False, indent=2, default=str),
         name=name,
+        attachment_type=allure.attachment_type.JSON,
+    )
+
+
+def _attach_assertions(assertions):
+    """逐条断言结果落盘（op/path/expected/actual/passed/message），供平台报告详情“断言结果”视图消费。"""
+    rows = [
+        {
+            "op": a.op,
+            "path": a.path,
+            "expected": a.expected,
+            "actual": a.actual,
+            "passed": bool(a.passed),
+            "message": a.message,
+        }
+        for a in assertions
+    ]
+    allure.attach(
+        json.dumps(rows, ensure_ascii=False, indent=2, default=str),
+        name="断言结果",
         attachment_type=allure.attachment_type.JSON,
     )

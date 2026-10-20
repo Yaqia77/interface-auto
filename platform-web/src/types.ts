@@ -88,6 +88,19 @@ export interface RunCaseSummary {
   status: "passed" | "failed" | "broken" | "skipped" | string;
   duration_ms: number;
   error: string;
+  summary: string;
+  assert_total: number | null;
+  assert_failed: number | null;
+}
+
+/** 单条断言执行结果（报告详情“断言结果”Tab） */
+export interface AssertResult {
+  op: string;
+  path: string;
+  expected: unknown;
+  actual: unknown;
+  passed: boolean;
+  message: string;
 }
 
 export interface RunCasesResp {
@@ -106,4 +119,5 @@ export interface RunCaseDetail {
   trace: string;
   request: Record<string, unknown> | null;
   response: Record<string, unknown> | null;
+  assertions: AssertResult[] | null;
 }

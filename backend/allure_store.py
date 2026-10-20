@@ -73,6 +73,18 @@ def _find_attachment(result: dict, keyword: str) -> str | None:
     return None
 
 
+def _load_json_attachment(results_dir: Path, result: dict, keyword: str):
+    """读取指定关键字附件的 JSON（缺文件/解析失败返回 None）。"""
+    src = _find_attachment(result, keyword)
+    if not src or not (results_dir / src).exists():
+        return None
+    try:
+        with open(results_dir / src, encoding="utf-8") as fp:
+            return json.load(fp)
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def _case_id(result: dict) -> str:
     for p in result.get("parameters", []):
         m = _CASE_ID_RE.search(str(p.get("value", "")))
@@ -107,6 +119,11 @@ def list_cases(results_dir: Path) -> dict:
             stats[status] += 1
         name = r.get("name", "")
         prio = (_PRIORITY_RE.search(name) or [None, ""])[1] if _PRIORITY_RE.search(name) else ""
+        asserts = _load_json_attachment(results_dir, r, "断言")
+        assert_total = assert_failed = None
+        if isinstance(asserts, list) and asserts:
+            assert_total = len(asserts)
+            assert_failed = sum(1 for a in asserts if not a.get("passed"))
         summary.append({
             "case_id": _case_id(r),
             "name": name,
@@ -114,8 +131,37 @@ def list_cases(results_dir: Path) -> dict:
             "status": status,
             "duration_ms": (r.get("stop") or 0) - (r.get("start") or 0),
             "error": mask_text((r.get("statusDetails") or {}).get("message", ""))[:1200],
+            "assert_total": assert_total,
+            "assert_failed": assert_failed,
+            "summary": _result_summary(status, asserts),
         })
     return {"total": len(summary), "stats": stats, "items": summary}
+
+
+def _result_summary(status: str, asserts) -> str:
+    """结果摘要（已掩码）：有断言明细时给“断言 X/Y + 首条失败详情”，否则回退到状态。"""
+    if isinstance(asserts, list) and asserts:
+        total = len(asserts)
+        failed_list = [a for a in asserts if not a.get("passed")]
+        if not failed_list:
+            return f"全部断言通过（{total}/{total}）"
+        a = failed_list[0]
+        op = str(a.get("op", ""))
+        path = str(a.get("path", ""))
+        actual = mask_obj(a.get("actual"))
+        detail = f"断言 {total - len(failed_list)}/{total}：{op} {path} 实际 {actual}"
+        if op != "not_null":
+            detail += f" 期望 {mask_obj(a.get('expected'))}"
+        if a.get("message"):
+            detail += f"（{mask_text(str(a.get('message')))}）"
+        return detail[:200]
+    if status == "passed":
+        return "通过"
+    if status == "skipped":
+        return "已跳过"
+    if status == "broken":
+        return "执行异常"
+    return status
 
 
 def case_detail(results_dir: Path, case_id: str) -> dict | None:
@@ -144,5 +190,7 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
             if isinstance(resp.get("body"), str) and len(resp["body"]) > _BODY_LIMIT:
                 resp["body"] = resp["body"][:_BODY_LIMIT] + "…（已截断，完整内容见 Allure 报告）"
             detail["response"] = mask_obj(resp)
+        asserts = _load_json_attachment(results_dir, r, "断言")
+        detail["assertions"] = mask_obj(asserts) if isinstance(asserts, list) else None
         return detail
     return None
