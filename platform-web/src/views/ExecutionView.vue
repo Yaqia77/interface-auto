@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /** 执行中心：发起批次 → 轮询日志 → 查看/打开中文 Allure 报告。 */
 import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { EnvInfo, RunItem } from "../types";
@@ -22,6 +22,17 @@ const runs = ref<RunItem[]>([]);
 let timer: number | undefined;
 
 const router = useRouter();
+const route = useRoute();
+const carried = ref("");   // 从用例管理携带过来的筛选条件描述（非空则顶部提示）
+
+/** 清除预填条件（仅清从用例管理带来的三个过滤项，不动环境/文件） */
+function clearCarried() {
+  form.module = "";
+  form.priority = "";
+  form.keyword = "";
+  carried.value = "";
+  router.replace({ path: "/execution" });
+}
 
 const statusType = (s: string) =>
   (({ running: "warning", passed: "success", failed: "danger", error: "danger", cancelled: "info", unknown: "info" } as Record<string, any>)[s] ?? "info");
@@ -106,6 +117,18 @@ function watchRun(run: RunItem) {
 
 onMounted(async () => {
   loadRuns();
+  // 从用例管理“按当前条件执行”跳转而来：预填模块/优先级/关键字
+  const q = route.query;
+  if (q.module || q.priority || q.keyword) {
+    form.module = (q.module as string) || "";
+    form.priority = (q.priority as string) || "";
+    form.keyword = (q.keyword as string) || "";
+    const parts: string[] = [];
+    if (q.module) parts.push(`模块=${q.module}`);
+    if (q.priority) parts.push(`优先级=${q.priority}`);
+    if (q.keyword) parts.push(`关键字=${q.keyword}`);
+    carried.value = parts.join("，");
+  }
   const resp = await api.listEnvs();
   envs.value = resp.envs;
   form.env = resp.default_env ?? "";
@@ -119,6 +142,20 @@ onBeforeUnmount(stopPolling);
     <el-row :gutter="12">
       <el-col :span="8">
         <el-card shadow="never" header="发起执行">
+          <el-alert
+            v-if="carried"
+            type="warning"
+            :closable="false"
+            show-icon
+            style="margin-bottom: 12px"
+            title="已按用例管理的筛选条件预填"
+          >
+            <template #default>
+              <div style="font-size: 12px">{{ carried }}；确认环境后点“开始执行”即按此范围跑。
+                <el-button link type="primary" size="small" @click="clearCarried">清除条件</el-button>
+              </div>
+            </template>
+          </el-alert>
           <el-form label-width="80px" @submit.prevent>
             <el-form-item label="环境">
               <el-select v-model="form.env" style="width: 100%">

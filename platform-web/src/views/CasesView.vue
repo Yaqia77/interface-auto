@@ -1,9 +1,12 @@
 <script setup lang="ts">
 /** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
 import { computed, onMounted, reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { CaseItem, CaseMeta } from "../types";
+
+const router = useRouter();
 
 const loading = ref(false);
 const cases = ref<CaseItem[]>([]);
@@ -71,6 +74,18 @@ function reset() {
   filters.onlyEnabled = true;
   activeModule.value = "";
   search();
+}
+
+/** 携带当前筛选条件（模块/优先级/关键字）跳到执行中心预填，形成“看用例→直接跑”闭环 */
+function goExecute() {
+  router.push({
+    path: "/execution",
+    query: {
+      module: activeModule.value || undefined,
+      priority: filters.priority.length ? filters.priority.join(",") : undefined,
+      keyword: filters.keyword || undefined,
+    },
+  });
 }
 
 const prioType = (p: string) =>
@@ -456,6 +471,7 @@ onMounted(async () => {
             <el-button type="primary" @click="search">查询</el-button>
             <el-button @click="reset">重置</el-button>
             <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
+            <el-button type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
           </el-form-item>
         </el-form>
       </el-card>
