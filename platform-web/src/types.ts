@@ -274,3 +274,27 @@ export interface UserUpdateReq {
   enabled?: boolean;
   password?: string;
 }
+
+/** 操作审计留痕（/api/audit）：谁在什么时候改了什么 · 结果如何 */
+export interface AuditItem {
+  id: string;
+  ts: string;
+  username: string;
+  display_name: string;
+  role: string;
+  method: string;
+  path: string;
+  action: string;
+  target: string;
+  detail: string;
+  query: string;
+  status: number;
+  ok: boolean;
+  ip: string;
+}
+
+export interface AuditLogsResp {
+  total: number;
+  returned: number;
+  items: AuditItem[];
+}

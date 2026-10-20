@@ -22,6 +22,8 @@ PERMISSIONS = {
     "webhook:manage": {"admin", "tl"},                    # 通知配置
     "report:delete":  {"admin", "tl"},                    # 报告删除/清理
     "user:manage":    {"admin"},                          # 用户管理（系统管理）
+    "audit:view":     {"admin", "tl"},                    # 操作审计查询/导出（TL 系统管理只读）
+    "audit:manage":   {"admin"},                          # 审计日志清理
 }
 
 # 只读角色兜底：viewer/dev 不持有任何写权限码，天然仅 GET

@@ -6,7 +6,7 @@
     python tools/smoke_authz.py                  # 默认打 127.0.0.1:8000
     set IA_BASE=http://127.0.0.1:8899 && python tools/smoke_authz.py
 
-覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD。
+覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD、操作审计留痕。
 脚本只在 reports/ 下造一个 1970 年的假批次并删除它，不触碰任何真实报告，可重复执行。
 """
 import json
@@ -68,6 +68,18 @@ def login(username, password):
     return resp["token"], resp["user"]
 
 
+def req_text(method, path, token=None):
+    """取文本响应（CSV 导出类接口）。"""
+    r = urllib.request.Request(BASE + path, method=method)
+    if token:
+        r.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(r) as resp:
+            return resp.status, resp.read().decode("utf-8-sig", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode("utf-8", "replace")
+
+
 def main():
     if not FAKE_DIR.parent.is_dir():
         print("reports/ 不存在，后端可能未初始化", file=sys.stderr)
@@ -92,7 +104,9 @@ def main():
     check("viewer 权限集为空", viewer_user["permissions"] == [], viewer_user["permissions"])
     check("角色名中文回显", viewer_user["role_name"] == "只读访客", viewer_user["role_name"])
     admin_token, admin_user = login("admin", DEFAULT_PASS["admin"])
-    check("admin 权限全量(10)", len(admin_user["permissions"]) == 10, admin_user["permissions"])
+    check("admin 权限全量（含用户/审计管理）",
+          {"user:manage", "report:delete", "audit:view", "audit:manage"} <= set(admin_user["permissions"]),
+          admin_user["permissions"])
     # 预清理：上一轮冒烟可能残留测试账号，保证脚本可重复执行
     req("DELETE", "/api/auth/users/smoke_qa", token=admin_token)
     tl_token, tl_user = login("tl", DEFAULT_PASS["tl"])
@@ -150,6 +164,60 @@ def main():
     check("登出接口可用", code == 200, f"{code} {resp}")
     code, resp = req("GET", "/api/auth/me", token=admin_token)
     check("登出后 token 失效 401", code == 401, f"{code} {resp}")
+
+    # 后续审计用例需重新取一个有效 admin token
+    admin_token, _ = login("admin", DEFAULT_PASS["admin"])
+
+    print("== 5. 操作审计留痕 ==")
+    code, resp = req("GET", "/api/audit/logs")
+    check("未登录查审计 401", code == 401, f"{code} {resp}")
+    code, resp = req("GET", "/api/audit/logs", token=vt)
+    check("viewer 查审计被拒 403", code == 403, f"{code} {resp}")
+    code, resp = req("GET", "/api/audit/logs", token=tl_token)
+    check("tl 可查审计（系统管理只读粒度）", code == 200 and "items" in resp, f"{code} {resp}")
+
+    # 造一条含敏感字段的写操作，验证留痕 + 脱敏
+    code, resp = req("POST", "/api/auth/users",
+                     {"username": "smoke_aud", "password": "TopSecret123", "role": "qa"}, admin_token)
+    check("审计样本写操作成功", code == 201, f"{code} {resp}")
+    code, resp = req("GET", "/api/audit/logs?keyword=smoke_aud&limit=50", token=admin_token)
+    hits = resp.get("items", []) if code == 200 else []
+    check("写操作已落审计", code == 200 and len(hits) >= 1, f"{code} {resp}")
+    if hits:
+        top = hits[0]
+        check("审计动作名为可读中文", bool(top.get("action")) and top["action"] != "POST", top.get("action"))
+        check("审计记录操作人与角色", top.get("username") == "admin" and top.get("role") == "admin", top)
+        check("请求体已脱敏（明文密码不落盘）", "TopSecret123" not in json.dumps(top, ensure_ascii=False), top)
+        check("脱敏后仍保留字段轮廓", "***" in (top.get("detail") or ""), top.get("detail"))
+        print(f"       动作示例：{top.get('action')} | 对象：{top.get('target')} | 摘要：{top.get('detail')}")
+
+    # 失败登录与越权尝试也必须留痕
+    req("POST", "/api/auth/login", {"username": "admin", "password": "nope-not-right"})
+    code, resp = req("GET", "/api/audit/logs?keyword=%E7%99%BB%E5%BD%95%E5%B0%9D%E8%AF%95&limit=20", token=admin_token)
+    log_hits = resp.get("items", []) if code == 200 else []
+    check("登录尝试已留痕", code == 200 and len(log_hits) >= 1, f"{code} {resp}")
+    check("登录留痕不含明文密码",
+          all("nope-not-right" not in json.dumps(h, ensure_ascii=False) for h in log_hits), log_hits[:1])
+
+    code, resp = req("GET", "/api/audit/logs?only_failed=true&limit=50", token=admin_token)
+    fails = resp.get("items", []) if code == 200 else []
+    check("越权/未授权尝试作为失败留痕可筛", code == 200 and any(h.get("status") in (401, 403) for h in fails),
+          f"{code} {[h.get('status') for h in fails][:8]}")
+
+    code, resp = req("GET", "/api/audit/logs?username=admin&days=1&limit=20", token=admin_token)
+    scoped = resp.get("items", []) if code == 200 else []
+    check("按操作人 + 天数筛选生效",
+          code == 200 and scoped and all(h["username"] == "admin" for h in scoped), f"{code} {len(scoped)}")
+
+    code, body = req_text("GET", "/api/audit/export?token=" + admin_token)
+    check("审计 CSV 可导出（?token= 鉴权）", code == 200 and body.startswith("时间"), f"{code} {body[:40]}")
+
+    code, resp = req("DELETE", "/api/audit/logs?keep_days=0", token=tl_token)
+    check("tl 清理审计被拒 403", code == 403, f"{code} {resp}")
+
+    # 回收本轮自建账号：smoke_qa 已在第 4 节删除，此处只回收 smoke_aud
+    code, resp = req("DELETE", "/api/auth/users/smoke_aud", token=admin_token)
+    check("冒烟测试账号已回收", code == 200, f"{code} {resp}")
 
     # ---- 收尾：删除假批次目录（不碰任何真实报告） ----
     shutil.rmtree(FAKE_DIR, ignore_errors=True)

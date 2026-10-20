@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -51,6 +51,43 @@ export const api = {
 
   deleteUser: (username: string) =>
     http.delete<{ ok: boolean }>(`/auth/users/${encodeURIComponent(username)}`).then((r) => r.data),
+
+  /* ---------- 操作审计（admin/tl） ---------- */
+  listAuditLogs: (params: {
+    limit?: number;
+    username?: string;
+    keyword?: string;
+    days?: number;
+    only_failed?: boolean;
+  }) => http.get<AuditLogsResp>("/audit/logs", { params }).then((r) => r.data),
+
+  auditOperators: () => http.get<{ operators: string[] }>("/audit/operators").then((r) => r.data),
+
+  /** 清理审计日志：keep_days>0 仅保留最近 N 天，0 表示清空（仅 admin） */
+  purgeAudit: (keepDays: number) =>
+    http
+      .delete<{ keep_days: number; removed: number }>(`/audit/logs?keep_days=${keepDays}`)
+      .then((r) => r.data),
+
+  /**
+   * CSV 导出直链：浏览器新标签下载无法带 Authorization 头，
+   * 故 token 走 query（后端 extract_token 已支持 ?token= 兜底）。
+   */
+  auditExportUrl: (params: {
+    username?: string;
+    keyword?: string;
+    days?: number;
+    only_failed?: boolean;
+  }) => {
+    const q = new URLSearchParams();
+    if (params.username) q.set("username", params.username);
+    if (params.keyword) q.set("keyword", params.keyword);
+    if (params.days) q.set("days", String(params.days));
+    if (params.only_failed) q.set("only_failed", "true");
+    const token = getToken();
+    if (token) q.set("token", token);
+    return `/api/audit/export?${q.toString()}`;
+  },
 
   listCases: (params: {
     module?: string;

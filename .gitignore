@@ -34,6 +34,9 @@ data/dependencies.json
 # 平台用户账号（含密码哈希，绝不入库；首次启动自动播种默认角色）
 data/users.json
 
+# 操作审计留痕（含请求体摘要，可能触及敏感信息，不入库）
+data/audit_logs.jsonl
+
 # Excel 打开时的临时文件
 ~$*
 
@@ -51,3 +54,6 @@ docs/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 提交 message 临时文件（git commit -F 用完即删，不入库）
+_commit_msg.txt

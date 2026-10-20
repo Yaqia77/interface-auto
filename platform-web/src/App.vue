@@ -72,6 +72,7 @@ function onUserCommand(cmd: string) {
         </el-menu-item-group>
         <el-menu-item-group title="系统管理">
           <el-menu-item v-perm="'user:manage'" index="/users">👥 用户管理</el-menu-item>
+          <el-menu-item v-perm="'audit:view'" index="/audit">📜 操作审计</el-menu-item>
         </el-menu-item-group>
       </el-menu>
       <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>

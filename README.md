@@ -217,6 +217,8 @@ cd platform-web ; npm run dev
 | `run:create` 触发/取消执行 | ✓ | ✓ | ✓ | ✓ | |
 | `env:manage` / `secret:manage` / `webhook:manage` / `schedule:manage` | ✓ | ✓ | | | |
 | `report:delete` 报告删除与旧报告清理 | ✓ | ✓ | | | |
+| `audit:view` 操作审计查询/导出 | ✓ | ✓ | | | |
+| `audit:manage` 审计日志清理 | ✓ | | | | |
 | `user:manage` 用户管理 | ✓ | | | | |
 
 说明：
@@ -225,6 +227,12 @@ cd platform-web ; npm run dev
   账号数据存 `data/users.json`（已 gitignore，密码以 PBKDF2-HMAC-SHA256 加盐哈希保存）
 - 报告堆积处理：报告列表行内「删除」+ 顶部「清理旧报告」（按时间保留最近 N 个批次，
   同步清理报告目录、历史条目与场景卡片的批次引用；运行中的批次拒绝删除）
+- 三层权限拦截：路由 `meta.perm`（菜单级）→ `v-perm` 指令（按钮级）→ 后端 `require_perm`（数据级），
+  前端仅控制可见性，真正拦下越权请求的是后端
+- 操作审计留痕（`data/audit_logs.jsonl`，已 gitignore）：所有写操作与登录尝试都记录
+  操作人/角色/动作/对象/请求摘要/结果/IP，入口在侧栏「系统管理 → 操作审计」（admin/tl 可见）；
+  `password`、`token` 类字段与 Bearer 串写入前统一脱敏为 `***`，明文密码与凭证**绝不落盘**；
+  文件超 2MB 自动裁剪最旧记录，页面支持按操作人/时间/仅失败筛选与 CSV 导出（Excel 双击不乱码）
 
 ## 路线图
 
@@ -232,3 +240,4 @@ cd platform-web ; npm run dev
 - [ ] v1.1：CI 集成（Jenkinsfile / GitHub Actions）、失败通知（钉钉/企微/邮件）
 - [ ] v2：页面版（FastAPI + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
   - [x] v2 骨架：用例/场景/执行/报告/环境/凭证/通知/定时任务 + 登录与 RBAC 权限
+  - [x] v2 审计：写操作与登录尝试留痕、脱敏落盘、筛选查询与 CSV 导出、超量自动裁剪
