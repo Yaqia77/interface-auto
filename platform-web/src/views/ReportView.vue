@@ -20,6 +20,13 @@ const activeTab = ref("detail");
 const allureSrc = ref("");       // 懒加载：切到 Allure Tab 才设 src（首次现场生成可能 30s+）
 const allureLoading = ref(false);
 
+/* ================= 与上批次对比 ================= */
+const runs = ref<RunItem[]>([]);           // 候选基线批次列表（listRuns 按时间倒序）
+const baselineRunId = ref("");             // 选中的对比基线批次
+const baselineCases = ref<RunCaseSummary[]>([]);
+const baselineLoading = ref(false);
+const compared = ref(false);               // 是否已成功加载过基线明细
+
 const statusType = (s: string) =>
   (({ passed: "success", failed: "danger", broken: "warning", skipped: "info" } as Record<string, any>)[s] ?? "info");
 
@@ -130,16 +137,121 @@ async function load() {
     stats.value = resp.stats;
     total.value = resp.total;
     try { batch.value = await api.getRun(runId.value); } catch { batch.value = null; }  // cli 批次取不到内存详情
+    // 加载候选基线批次（失败不阻断主流程），默认取当前批次之前最近的一次
+    try {
+      runs.value = await api.listRuns(50);
+      pickDefaultBaseline();
+    } catch { runs.value = []; }
   } finally {
     loading.value = false;
   }
 }
+
+/* ================= 与上批次对比：基线选择 + 用例级 diff ================= */
+function pickDefaultBaseline() {
+  const curStart = batch.value?.started_at ?? "";
+  // listRuns 已按时间倒序；取早于当前批次、且非自身的最近一次
+  const older = runs.value.filter(
+    (r) => r.run_id !== runId.value && (!curStart || (r.started_at ?? "") <= curStart));
+  baselineRunId.value =
+    older[0]?.run_id ?? runs.value.find((r) => r.run_id !== runId.value)?.run_id ?? "";
+}
+
+async function loadCompare() {
+  if (!baselineRunId.value) return;
+  baselineLoading.value = true;
+  try {
+    const resp = await api.getRunCases(baselineRunId.value);
+    baselineCases.value = resp.items;
+    compared.value = true;
+  } finally {
+    baselineLoading.value = false;
+  }
+}
+
+const baselineOptions = computed(() =>
+  runs.value.filter((r) => r.run_id !== runId.value).map((r) => ({
+    value: r.run_id,
+    label: `${r.run_id}　${r.started_at ?? ""}（${r.status}）`,
+  })));
+
+const isFail = (s?: string) => !!s && FAILED_STATUSES.includes(s);
+
+/** 基线通过率（用于通过率增减），无基线明细时为 null */
+const baselinePassRate = computed(() => {
+  const t = baselineCases.value.length;
+  if (!t) return null;
+  return Math.round((baselineCases.value.filter((c) => c.status === "passed").length / t) * 100);
+});
+const passRateDelta = computed(() =>
+  baselinePassRate.value == null ? null : passRate.value - baselinePassRate.value);
+
+interface DiffRow {
+  case_id: string;
+  name: string;
+  priority: string;
+  from: string;   // 基线状态，"—" 表示基线无此用例
+  to: string;     // 当前状态，"—" 表示当前无此用例
+  type: "regression" | "fixed" | "persistent" | "added" | "removed";
+}
+type TagType = "danger" | "success" | "warning" | "primary" | "info";
+const DIFF_META: Record<DiffRow["type"], { label: string; tag: TagType; color: string }> = {
+  regression: { label: "新增失败", tag: "danger", color: "#f56c6c" },
+  fixed: { label: "已修复", tag: "success", color: "#67c23a" },
+  persistent: { label: "持续失败", tag: "warning", color: "#e6a23c" },
+  added: { label: "新增用例", tag: "primary", color: "#409eff" },
+  removed: { label: "已移除", tag: "info", color: "#909399" },
+};
+const DIFF_ORDER: DiffRow["type"][] = ["regression", "fixed", "persistent", "added", "removed"];
+
+const diffRows = computed<DiffRow[]>(() => {
+  if (!compared.value) return [];
+  const curMap = new Map(cases.value.map((c) => [c.case_id, c]));
+  const baseMap = new Map(baselineCases.value.map((c) => [c.case_id, c]));
+  const rows: DiffRow[] = [];
+  const row = (id: string, c: RunCaseSummary | undefined, b: RunCaseSummary | undefined,
+    type: DiffRow["type"]): DiffRow => ({
+    case_id: id,
+    name: c?.name ?? b?.name ?? "",
+    priority: c?.priority ?? b?.priority ?? "",
+    from: b ? b.status : "—",
+    to: c ? c.status : "—",
+    type,
+  });
+  for (const [id, c] of curMap) {
+    const b = baseMap.get(id);
+    if (!b) { rows.push(row(id, c, b, "added")); continue; }
+    if (isFail(c.status) && !isFail(b.status)) rows.push(row(id, c, b, "regression"));
+    else if (!isFail(c.status) && isFail(b.status)) rows.push(row(id, c, b, "fixed"));
+    else if (isFail(c.status) && isFail(b.status)) rows.push(row(id, c, b, "persistent"));
+  }
+  for (const [id, b] of baseMap) if (!curMap.has(id)) rows.push(row(id, undefined, b, "removed"));
+  return rows.sort((a, b) => DIFF_ORDER.indexOf(a.type) - DIFF_ORDER.indexOf(b.type)
+    || a.case_id.localeCompare(b.case_id));
+});
+
+const diffStats = computed(() => {
+  const m: Record<DiffRow["type"], number> = { regression: 0, fixed: 0, persistent: 0, added: 0, removed: 0 };
+  for (const r of diffRows.value) m[r.type]++;
+  return m;
+});
+const hasBaseline = computed(() => !!baselineRunId.value && compared.value);
+
 
 function onTabChange(name: string) {
   if (name === "allure" && !allureSrc.value) {
     allureLoading.value = true;
     allureSrc.value = api.reportUrl(runId.value);
   }
+  if (name === "compare" && !compared.value && !baselineLoading.value) {
+    loadCompare();
+  }
+}
+
+function onBaselineChange() {
+  compared.value = false;
+  baselineCases.value = [];
+  loadCompare();
 }
 
 const durFmt = (ms: number) => (ms / 1000).toFixed(2) + "s";
@@ -171,7 +283,7 @@ onMounted(load);
       <el-col :span="6"><el-card shadow="never" class="kpi"><div class="label">用例总数</div><div class="value">{{ total }}</div></el-card></el-col>
       <el-col :span="6"><el-card shadow="never" class="kpi"><div class="label">通过</div><div class="value ok">{{ stats.passed ?? 0 }}</div></el-card></el-col>
       <el-col :span="6"><el-card shadow="never" class="kpi"><div class="label">失败</div><div class="value fail">{{ failedCount }}</div></el-card></el-col>
-      <el-col :span="6"><el-card shadow="never" class="kpi"><div class="label">通过率</div><div class="value" :style="{ color: passRate >= 100 ? '#67c23a' : passRate >= 60 ? '#e6a23c' : '#f56c6c' }">{{ passRate }}%</div></el-card></el-col>
+      <el-col :span="6"><el-card shadow="never" class="kpi"><div class="label">通过率</div><div class="value" :style="{ color: passRate >= 100 ? '#67c23a' : passRate >= 60 ? '#e6a23c' : '#f56c6c' }">{{ passRate }}%</div><div v-if="passRateDelta != null" class="kpi-trend" :style="{ color: passRateDelta > 0 ? '#67c23a' : passRateDelta < 0 ? '#f56c6c' : '#909399' }">{{ passRateDelta > 0 ? "▲ +" : passRateDelta < 0 ? "▼ " : "＝ " }}{{ passRateDelta }}% 较基线</div></el-card></el-col>
     </el-row>
 
     <el-tabs v-model="activeTab" @tab-change="onTabChange">
@@ -255,6 +367,71 @@ onMounted(load);
           style="width: 100%; height: calc(100vh - 260px); border: 1px solid #e4e7ed; border-radius: 6px; background: #fff"
         />
       </el-tab-pane>
+
+      <el-tab-pane label="与上批次对比" name="compare">
+        <el-card shadow="never" v-loading="baselineLoading">
+          <div class="filter-bar">
+            <span style="font-size: 13px; color: #606266">基线批次</span>
+            <el-select
+              v-model="baselineRunId"
+              filterable
+              placeholder="选择对比的基线批次"
+              style="width: 420px"
+              @change="onBaselineChange"
+            >
+              <el-option v-for="o in baselineOptions" :key="o.value" :label="o.label" :value="o.value" />
+            </el-select>
+            <el-button :disabled="!baselineRunId" @click="loadCompare">重新对比</el-button>
+            <span v-if="passRateDelta != null" class="filter-count">
+              通过率较基线
+              <b :style="{ color: passRateDelta > 0 ? '#67c23a' : passRateDelta < 0 ? '#f56c6c' : '#909399' }">
+                {{ passRateDelta > 0 ? "▲ +" : passRateDelta < 0 ? "▼ " : "＝ " }}{{ passRateDelta }}%
+              </b>
+            </span>
+          </div>
+
+          <div v-if="!baselineOptions.length" class="dim">
+            没有其他批次可供对比。
+          </div>
+          <template v-else-if="hasBaseline">
+            <div class="diff-stats">
+              <div v-for="t in DIFF_ORDER" :key="t" class="diff-chip" :style="{ borderColor: DIFF_META[t].color }">
+                <span class="dot" :style="{ background: DIFF_META[t].color }" />
+                <b>{{ DIFF_META[t].label }}</b>
+                <span class="diff-count">{{ diffStats[t] }}</span>
+              </div>
+            </div>
+
+            <el-table v-if="diffRows.length" :data="diffRows" size="small" row-key="case_id" style="margin-top: 12px">
+              <el-table-column label="变化" width="110">
+                <template #default="{ row }"><el-tag :type="DIFF_META[row.type].tag" size="small">{{ DIFF_META[row.type].label }}</el-tag></template>
+              </el-table-column>
+              <el-table-column label="用例" min-width="240">
+                <template #default="{ row }">
+                  <div class="mono">{{ row.case_id }}</div>
+                  <div class="case-name">{{ row.name }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="priority" label="优先级" width="80" />
+              <el-table-column label="基线 → 当前" width="200">
+                <template #default="{ row }">
+                  <el-tag :type="row.from === '—' ? 'info' : statusType(row.from)" size="small">{{ row.from }}</el-tag>
+                  <span style="margin: 0 6px">→</span>
+                  <el-tag :type="row.to === '—' ? 'info' : statusType(row.to)" size="small">{{ row.to }}</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+            <el-alert
+              v-else
+              type="success"
+              :closable="false"
+              show-icon
+              title="与基线批次逐条一致，无新增失败 / 修复 / 用例增减。"
+            />
+          </template>
+          <div v-else-if="!baselineLoading" class="dim">请选择基线批次后开始对比。</div>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- 执行详情抽屉：请求 / 响应 / 断言逐条 / 日志 -->
@@ -330,6 +507,11 @@ onMounted(load);
 .fail-cat { display: flex; align-items: center; gap: 6px; }
 .fail-cat i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
 .cat-hint { color: #e6a23c; font-size: 12px; }
+.kpi-trend { font-size: 12px; margin-top: 2px; }
+.diff-stats { display: flex; gap: 12px; flex-wrap: wrap; }
+.diff-chip { display: flex; align-items: center; gap: 6px; border: 1px solid; border-radius: 6px; padding: 8px 14px; font-size: 13px; }
+.diff-chip .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.diff-count { font-size: 18px; font-weight: 700; margin-left: 2px; }
 .json { background: #f8f9fb; border: 1px solid #e4e7ed; border-radius: 6px; padding: 10px 12px; font-family: Consolas, Monaco, monospace; font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 460px; overflow: auto; margin: 0; }
 .fail-line { background: #fef0f0; border: 1px solid #fde2e2; border-radius: 4px; padding: 8px 12px; color: #f56c6c; font-size: 12px; margin-top: 12px; white-space: pre-wrap; word-break: break-all; }
 </style>
