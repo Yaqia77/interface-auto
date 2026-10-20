@@ -1,15 +1,19 @@
 """用例查询与写回接口：读取复用 core.excel_loader，更新走 backend.excel_writer（校验后原子落盘）。"""
+import json
 from collections import Counter
 from dataclasses import asdict
+from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 
 from backend import excel_writer
 from backend.excel_writer import CaseWriteError
 from backend.schemas import CaseCreate, CaseOut, CasePage, CaseUpdate
 from core import excel_loader
-from core.excel_loader import ExcelFormatError
+from core.excel_loader import CASE_COLUMNS, ExcelFormatError
 
 ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上溯两级）
 
@@ -138,6 +142,59 @@ def list_variables(file: str = Query(default="data/api_cases.xlsx")):
     }
 
 
+@router.get("/export", summary="导出用例 xlsx（按筛选条件）")
+def export_cases(
+    file: str = Query(default="data/api_cases.xlsx"),
+    module: str | None = None,
+    priority: str | None = None,
+    keyword: str | None = None,
+    run: bool | None = None,
+):
+    path = _resolve_file(file)
+    try:
+        result = _load_cached(path)
+    except ExcelFormatError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    cases = _filtered(result.cases, module, priority, keyword, run)
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "用例"
+    headers = list(CASE_COLUMNS.keys())
+    ws.append(headers)
+
+    fields = list(CASE_COLUMNS.values())
+    for c in cases:
+        row = []
+        for f in fields:
+            v = getattr(c, f, None)
+            if f == "run":
+                row.append("Y" if v else "N")
+            elif f in ("headers", "params", "extract", "asserts"):
+                row.append(json.dumps(v, ensure_ascii=False) if v else None)
+            elif f == "body":
+                if v is None:
+                    row.append(None)
+                elif isinstance(v, str):
+                    row.append(v)
+                else:
+                    row.append(json.dumps(v, ensure_ascii=False))
+            elif f == "timeout":
+                row.append(float(v) if v else None)
+            else:
+                row.append(v)
+        ws.append(row)
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="cases_export.xlsx"'},
+    )
+
+
 @router.get("/{case_id}", response_model=CaseOut, summary="用例详情")
 def get_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
     path = _resolve_file(file)
@@ -168,6 +225,46 @@ def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx
     if fresh is None:
         raise HTTPException(status_code=500, detail="新增后未能重新读到用例")
     return CaseOut(**asdict(fresh))
+
+
+@router.post("/import", summary="导入用例 xlsx（追加不重复的 case_id）")
+async def import_cases(
+    uploaded_file: UploadFile = File(..., description="xlsx 文件，格式与导出一致"),
+    file: str = Query(default="data/api_cases.xlsx", description="目标用例文件"),
+):
+    # 校验目标
+    path = _resolve_file(file)
+    if path.is_dir():
+        raise HTTPException(status_code=400, detail="目录模式下无法确定导入目标文件，请指定具体 xlsx")
+    # 检查上传文件扩展名
+    if not (uploaded_file.filename or "").endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+
+    # 保存到临时文件
+    tmp = path.with_name(f"~$import_tmp_{uploaded_file.filename}")
+    try:
+        content = await uploaded_file.read()
+        tmp.write_bytes(content)
+
+        # 解析导入文件
+        try:
+            import_result = excel_loader.load(tmp)
+        except ExcelFormatError as e:
+            raise HTTPException(status_code=400, detail=f"导入文件格式错误: {e}")
+        except FileNotFoundError:
+            raise HTTPException(status_code=400, detail="导入文件为空或无法读取")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"无法解析 xlsx: {e!r}")
+
+        # 批量追加
+        try:
+            summary = excel_writer.bulk_append(path, import_result.cases)
+        except CaseWriteError as e:
+            raise HTTPException(status_code=_ERROR_STATUS.get(e.kind, 400), detail=str(e))
+
+        return summary
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 @router.delete("/{case_id}", summary="删除用例（Excel 整行删除，校验通过才落盘）")

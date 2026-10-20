@@ -139,4 +139,19 @@ export const api = {
   /** 按场景发起执行，返回新批次 RunItem */
   runPlan: (id: string) =>
     http.post<RunItem>(`/plans/${encodeURIComponent(id)}/run`).then((r) => r.data),
+
+  /* ---------- 用例导入导出 ---------- */
+  /** 导出筛选结果为 xlsx 下载 */
+  exportCases: (params: { module?: string; priority?: string; keyword?: string; run?: boolean }) =>
+    http.get("/cases/export", { params, responseType: "blob" }).then((r) => r.data as Blob),
+
+  /** 导入 xlsx 文件追加用例 */
+  importCases: (file: File) => {
+    const fd = new FormData();
+    fd.append("uploaded_file", file);
+    return http
+      .post<{ imported: number; skipped: number; errors: string[] }>("/cases/import", fd,
+        { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
+      .then((r) => r.data);
+  },
 };

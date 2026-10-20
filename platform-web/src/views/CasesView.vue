@@ -153,6 +153,48 @@ function queryModules(qs: string, cb: (r: { value: string }[]) => void) {
 const selected = ref<CaseItem[]>([]);
 const batching = ref(false);
 
+/* ================= 导入导出 ================= */
+const importInput = ref<HTMLInputElement>();
+
+async function doExport() {
+  try {
+    const blob = await api.exportCases({
+      priority: filters.priority.length ? filters.priority.join(",") : undefined,
+      keyword: filters.keyword || undefined,
+      run: filters.onlyEnabled ? true : undefined,
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cases_export.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success("导出成功");
+  } catch { /* 拦截器已提示 */ }
+}
+
+function triggerImport() {
+  importInput.value?.click();
+}
+
+async function onFileSelected(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  try {
+    const result = await api.importCases(file);
+    const { imported, skipped, errors } = result;
+    if (errors.length) {
+      ElMessage.warning(`导入 ${imported} 条，跳过 ${skipped} 条已有，${errors.length} 条格式异常`);
+    } else {
+      ElMessage.success(`导入 ${imported} 条，跳过 ${skipped} 条已有`);
+    }
+    await search();
+    meta.value = await api.getCaseMeta();
+  } catch { /* 拦截器已提示 */ }
+}
+
 function onSelectionChange(rows: CaseItem[]) {
   selected.value = rows;
 }
@@ -550,6 +592,9 @@ onMounted(async () => {
             <el-button @click="reset">重置</el-button>
             <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
             <el-button type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
+            <el-button plain @click="doExport">⬇ 导出</el-button>
+            <el-button plain @click="triggerImport">⬆ 导入</el-button>
+            <input ref="importInput" type="file" accept=".xlsx" style="display:none" @change="onFileSelected" />
           </el-form-item>
         </el-form>
       </el-card>

@@ -228,3 +228,68 @@ def _safe_remove(p: Path) -> None:
         p.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def bulk_append(file_path: Path, cases: list) -> dict:
+    """批量追加用例（一次打开/落盘），已存在的 case_id 跳过。
+
+    cases: TestCase 列表（由 excel_loader.load 解析得到）。
+    返回 {"imported": N, "skipped": M, "errors": [str]}。
+    """
+    if not file_path.is_file():
+        raise CaseWriteError("not_found", f"用例文件不存在: {file_path.name}")
+
+    wb = load_workbook(file_path)
+    try:
+        ws, field_to_col = _sheet_of(wb, file_path)
+
+        # 收集现有 case_id（大小写不敏感）
+        col_id = field_to_col["case_id"]
+        existing = set()
+        for r in range(2, ws.max_row + 1):
+            v = str(ws.cell(row=r, column=col_id).value or "").strip()
+            if v:
+                existing.add(v.lower())
+
+        imported = 0
+        skipped = 0
+        errors: list[str] = []
+
+        for tc in cases:
+            cid = tc.case_id.strip()
+            if cid.lower() in existing:
+                skipped += 1
+                continue
+            # 先序列化全部字段，任何失败则整条跳过（不污染工作表）
+            row_values: dict[str, object] = {}
+            has_error = False
+            for field in ("module", "api_name", "case_desc", "priority", "run",
+                          "method", "url", "headers", "params", "body",
+                          "extract", "asserts", "timeout"):
+                col = field_to_col.get(field)
+                if col is None:
+                    continue
+                try:
+                    val = getattr(tc, field, None)
+                    row_values[field] = _serialize(field, val)
+                except CaseWriteError as e:
+                    errors.append(f"{cid}: {e}")
+                    has_error = True
+                    break
+            if has_error:
+                continue
+
+            # 写入新行
+            row = ws.max_row + 1
+            ws.cell(row=row, column=col_id).value = cid
+            existing.add(cid.lower())
+            for field, cell_val in row_values.items():
+                ws.cell(row=row, column=field_to_col[field]).value = cell_val
+            imported += 1
+
+        if imported > 0:
+            _save_validated(wb, file_path)
+    finally:
+        wb.close()
+
+    return {"imported": imported, "skipped": skipped, "errors": errors}
