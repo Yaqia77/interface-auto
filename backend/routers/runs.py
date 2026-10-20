@@ -209,6 +209,50 @@ def list_runs(limit: int = 20):
     return items[:limit]
 
 
+@router.get("/history/{case_id}", summary="单用例跨批次执行历史（新→旧）")
+def case_history(case_id: str, limit: int = 30):
+    """扫描近期批次的 allure-results，抽取该用例逐次结果，供用例历史时间线。
+
+    只返回含该用例的批次；cli 历史目录会现场推断（扫描量受 limit 约束）。
+    """
+    limit = max(1, min(limit, 100))
+    runs = list_runs(limit=500)
+    history: list[dict] = []
+    for r in runs:
+        if len(history) >= limit:
+            break
+        rel = r.report_dir or _resolve_report_dir(r.run_id)
+        if not rel:
+            continue
+        results = (ROOT / rel) / "allure-results"
+        if not results.is_dir():
+            continue
+        rec = allure_store.case_run_summary(results, case_id)
+        if rec is None:
+            continue
+        history.append({
+            "run_id": r.run_id, "source": r.source, "started_at": r.started_at,
+            "finished_at": r.finished_at, **rec,
+        })
+    # 连续失败（从最新往回数，非失败即断链）
+    FAILED = {"failed", "broken"}
+    consec = 0
+    for h in history:
+        if h["status"] in FAILED:
+            consec += 1
+        else:
+            break
+    return {
+        "case_id": case_id,
+        "scanned_batches": min(len(runs), 500),
+        "found": len(history),
+        "passed": sum(1 for h in history if h["status"] == "passed"),
+        "failed": sum(1 for h in history if h["status"] in FAILED),
+        "consec_fail": consec,
+        "history": history,
+    }
+
+
 @router.get("/{run_id}", response_model=RunOut, summary="批次详情（含日志尾部）")
 def get_run(run_id: str):
     with _LOCK:

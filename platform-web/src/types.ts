@@ -136,3 +136,24 @@ export interface SecretsResp {
   exists: boolean;
   items: SecretVar[];
 }
+
+/** 单用例跨批次执行历史（/api/runs/history/{case_id}） */
+export interface CaseHistoryEntry {
+  run_id: string;
+  source: "api" | "cli" | string;
+  started_at: string | null;
+  finished_at: string | null;
+  status: string;
+  duration_ms: number;
+  summary: string;
+  error: string;
+}
+export interface CaseHistoryResp {
+  case_id: string;
+  scanned_batches: number;
+  found: number;
+  passed: number;
+  failed: number;
+  consec_fail: number;
+  history: CaseHistoryEntry[];
+}

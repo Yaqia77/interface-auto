@@ -164,6 +164,25 @@ def _result_summary(status: str, asserts) -> str:
     return status
 
 
+def case_run_summary(results_dir: Path, case_id: str) -> dict | None:
+    """单批次内指定用例的结果摘要（供跨批次历史聚合）；未命中返回 None。
+
+    仅在命中该 case_id 时才读取断言附件，避免逐附件的无谓 IO。
+    """
+    for r in _load_results(results_dir):
+        if _case_id(r) != case_id:
+            continue
+        status = r.get("status", "unknown")
+        asserts = _load_json_attachment(results_dir, r, "断言")
+        return {
+            "status": status,
+            "duration_ms": (r.get("stop") or 0) - (r.get("start") or 0),
+            "summary": _result_summary(status, asserts),
+            "error": mask_text((r.get("statusDetails") or {}).get("message", ""))[:600],
+        }
+    return None
+
+
 def case_detail(results_dir: Path, case_id: str) -> dict | None:
     """单用例明细：请求/响应快照（均已掩码+截断）+ 失败信息。"""
     for r in _load_results(results_dir):

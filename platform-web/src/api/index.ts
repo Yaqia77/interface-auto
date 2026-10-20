@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -93,6 +93,12 @@ export const api = {
       .get<RunCaseDetail>(
         `/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}`
       )
+      .then((r) => r.data),
+
+  /** 单用例跨批次执行历史（新→旧） */
+  getCaseHistory: (caseId: string, limit = 30) =>
+    http
+      .get<CaseHistoryResp>(`/runs/history/${encodeURIComponent(caseId)}`, { params: { limit } })
       .then((r) => r.data),
 
   /** 单文件 Allure 中文报告（新标签打开；后端首次访问会现场生成） */

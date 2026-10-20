@@ -4,7 +4,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { CaseItem, CaseMeta } from "../types";
+import type { CaseHistoryResp, CaseItem, CaseMeta } from "../types";
 
 const router = useRouter();
 const route = useRoute();
@@ -441,6 +441,46 @@ async function removeCase(row: CaseItem) {
   } catch { /* 拦截器已提示 */ }
 }
 
+/* ================= 用例历史（跨批次执行时间线） ================= */
+const histVisible = ref(false);
+const histLoading = ref(false);
+const histRow = ref<CaseItem | null>(null);
+const hist = ref<CaseHistoryResp | null>(null);
+
+async function openHistory(row: CaseItem) {
+  histRow.value = row;
+  hist.value = null;
+  histVisible.value = true;
+  histLoading.value = true;
+  try {
+    hist.value = await api.getCaseHistory(row.case_id, 30);
+  } catch {
+    /* 拦截器已提示 */
+  } finally {
+    histLoading.value = false;
+  }
+}
+
+const hStatusType = (s: string) =>
+  (({ passed: "success", failed: "danger", broken: "warning", skipped: "info" } as Record<string, any>)[s] ?? "info");
+const durFmt = (ms: number) => (ms / 1000).toFixed(2) + "s";
+const FAILED = ["failed", "broken"];
+const dotColor = (s: string) =>
+  (({ passed: "#67c23a", failed: "#f56c6c", broken: "#e6a23c", skipped: "#c0c4cc" } as Record<string, string>)[s] ?? "#909399");
+const histTrend = computed(() => {
+  const h = hist.value;
+  if (!h || !h.found) return "";
+  if (h.consec_fail > 0) return `已连续 ${h.consec_fail} 个批次失败`;
+  if (h.history[0]?.status === "passed") return "最近一次通过";
+  return "";
+});
+function histRerun() {
+  if (histRow.value) router.push({ path: "/execution", query: { keyword: histRow.value.case_id } });
+}
+function histOpenRun(runId: string) {
+  router.push({ path: "/report", query: { runId, caseId: histRow.value?.case_id } });
+}
+
 onMounted(async () => {
   // 从工作台（优先级条/模块/KPI）带参跳转而来：预填模块/优先级/关键字
   const q = route.query;
@@ -570,9 +610,10 @@ onMounted(async () => {
               <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="165" fixed="right">
+          <el-table-column label="操作" width="205" fixed="right">
             <template #default="{ row }">
               <div class="op-cell">
+                <el-button size="small" text type="primary" @click="openHistory(row)">历史</el-button>
                 <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
                 <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
                 <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
@@ -709,6 +750,51 @@ onMounted(async () => {
         <el-button type="primary" :loading="saving" @click="saveEdit">{{ mode === "create" ? "新增并写回 Excel" : "保存并写回 Excel" }}</el-button>
       </el-form>
     </el-drawer>
+
+    <!-- 用例历史抽屉：跨批次执行时间线 + 明细（数据源 /api/runs/history/{id}） -->
+    <el-drawer v-model="histVisible" size="46%" :title="`用例历史 ${histRow?.case_id ?? ''}`">
+      <div v-loading="histLoading">
+        <template v-if="hist && hist.found">
+          <div class="hist-meta">
+            <div class="hist-name">{{ histRow?.api_name }} · {{ histRow?.module }}</div>
+            <div class="hist-sub">
+              扫描 {{ hist.scanned_batches }} 个批次，该用例出现 {{ hist.found }} 次；
+              <el-tag size="small" type="success">通过 {{ hist.passed }}</el-tag>
+              <el-tag size="small" type="danger" style="margin-left: 6px">失败 {{ hist.failed }}</el-tag>
+              <span v-if="histTrend" class="hist-trend">{{ histTrend }}</span>
+            </div>
+          </div>
+          <div class="hist-bar">
+            <el-tooltip v-for="h in [...hist.history].reverse()" :key="'b' + h.run_id" placement="top">
+              <template #content>{{ h.run_id }}<br />{{ h.status }} · {{ h.started_at ?? "—" }}</template>
+              <div class="hist-dot" :style="{ background: dotColor(h.status) }" @click="histOpenRun(h.run_id)" />
+            </el-tooltip>
+          </div>
+          <div class="hist-legend">旧 ← 时间轴（点色块看该批次该用例明细）→ 新</div>
+          <el-table :data="hist.history" size="small" row-key="run_id" style="margin-top: 10px">
+            <el-table-column label="状态" width="84">
+              <template #default="{ row }"><el-tag :type="hStatusType(row.status)" size="small">{{ row.status }}</el-tag></template>
+            </el-table-column>
+            <el-table-column label="批次" min-width="210">
+              <template #default="{ row }">
+                <div class="mono link" @click="histOpenRun(row.run_id)">{{ row.run_id }}</div>
+                <div class="hist-time">{{ row.started_at ?? "—" }} · {{ row.source }}</div>
+              </template>
+            </el-table-column>
+            <el-table-column label="结果摘要" min-width="220">
+              <template #default="{ row }"><span :class="FAILED.includes(row.status) ? 'txt-fail' : 'txt-ok'">{{ row.summary || row.status }}</span></template>
+            </el-table-column>
+            <el-table-column label="耗时" width="80">
+              <template #default="{ row }">{{ durFmt(row.duration_ms) }}</template>
+            </el-table-column>
+          </el-table>
+          <el-button type="warning" plain size="small" style="margin-top: 14px" @click="histRerun">▶ 重跑该用例</el-button>
+        </template>
+        <el-empty v-else-if="hist && !hist.found" description="近期批次中未见该用例的执行记录">
+          <el-button type="warning" plain @click="histRerun">▶ 立即执行该用例</el-button>
+        </el-empty>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -739,4 +825,18 @@ onMounted(async () => {
 .opt-val { float: right; color: #a0a4a8; font-size: 12px; margin-left: 16px; }
 .var-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
 .var-chip { cursor: pointer; font-family: Consolas, Monaco, monospace; }
+/* 用例历史抽屉 */
+.hist-meta { margin-bottom: 12px; }
+.hist-name { font-weight: 600; font-size: 14px; color: #303133; }
+.hist-sub { margin-top: 4px; font-size: 12px; color: #909399; display: flex; align-items: center; flex-wrap: wrap; gap: 4px; }
+.hist-trend { margin-left: 8px; color: #f56c6c; font-weight: 600; }
+.hist-bar { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 8px; background: #f7f8fa; border-radius: 6px; }
+.hist-dot { width: 14px; height: 14px; border-radius: 3px; cursor: pointer; transition: transform 0.12s ease; }
+.hist-dot:hover { transform: scale(1.35); }
+.hist-legend { margin-top: 4px; font-size: 11px; color: #a0a4a8; }
+.hist-time { font-size: 12px; color: #909399; }
+.link { color: #409eff; cursor: pointer; }
+.txt-fail { color: #f56c6c; }
+.txt-ok { color: #67c23a; }
+.dim { color: #909399; font-size: 12px; }
 </style>
