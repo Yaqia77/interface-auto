@@ -10,52 +10,66 @@ const cases = ref<CaseItem[]>([]);
 const total = ref(0);
 const meta = ref<CaseMeta | null>(null);
 const filters = reactive({
-  module: "",
   priority: [] as string[],
   keyword: "",
   onlyEnabled: true,
 });
 
-/* ================= 模块分组展示（同模块用例归到一起，可点击展开/收起） ================= */
-const activeModules = ref<string[]>([]);   // 当前展开的模块（el-collapse v-model）
-const tableKey = ref(0);                    // 变更后强制重建表格以清空多选
+/* ================= 模块导航 + 整体分页（左侧选模块，右侧分页表格） ================= */
+const activeModule = ref("");      // "" = 全部用例
+const pageSize = ref(10);
+const currentPage = ref(1);
 
-/** 按模块分组：模块名按 zh 排序，组内按 case_id 排序 */
-const groupedCases = computed(() => {
-  const map = new Map<string, CaseItem[]>();
-  for (const c of [...cases.value].sort((a, b) => a.case_id.localeCompare(b.case_id))) {
-    if (!map.has(c.module)) map.set(c.module, []);
-    map.get(c.module)!.push(c);
-  }
-  return [...map.entries()]
-    .sort((a, b) => a[0].localeCompare(b[0], "zh"))
-    .map(([module, items]) => ({ module, items }));
+/** 各模块用例数（基于当前筛选结果，按 zh 排序） */
+const modules = computed(() => {
+  const c = new Map<string, number>();
+  for (const it of cases.value) c.set(it.module, (c.get(it.module) ?? 0) + 1);
+  return [...c.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name, "zh"));
 });
+
+/** 当前模块（或全部）的用例：按模块 + 编号排序 */
+const visibleCases = computed(() => {
+  const list = activeModule.value ? cases.value.filter((c) => c.module === activeModule.value) : cases.value;
+  return [...list].sort(
+    (a, b) => a.module.localeCompare(b.module, "zh") || a.case_id.localeCompare(b.case_id)
+  );
+});
+const pagedCases = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value;
+  return visibleCases.value.slice(start, start + pageSize.value);
+});
+
+function selectModule(name: string) {
+  activeModule.value = name;
+  currentPage.value = 1;
+}
 
 async function search() {
   loading.value = true;
   try {
     const resp = await api.listCases({
-      module: filters.module || undefined,
       priority: filters.priority.length ? filters.priority.join(",") : undefined,
       keyword: filters.keyword || undefined,
       run: filters.onlyEnabled ? true : undefined,
     });
     cases.value = resp.items;
-    total.value = resp.total;
-    activeModules.value = [...new Set(resp.items.map((c) => c.module))];  // 默认展开全部模块
-    selectedMap.value = {};                                               // 重新拉取即清空多选
-    tableKey.value++;
+    total.value = resp.items.length;
+    // 当前选中模块若已不在结果中（被筛掉/改名）则回退到全部
+    if (activeModule.value && !resp.items.some((c) => c.module === activeModule.value)) activeModule.value = "";
+    currentPage.value = 1;
+    selected.value = [];
   } finally {
     loading.value = false;
   }
 }
 
 function reset() {
-  filters.module = "";
   filters.priority = [];
   filters.keyword = "";
   filters.onlyEnabled = true;
+  activeModule.value = "";
   search();
 }
 
@@ -108,14 +122,12 @@ function queryModules(qs: string, cb: (r: { value: string }[]) => void) {
   cb(mods.filter((m) => !q || m.toLowerCase().includes(q)).map((m) => ({ value: m })));
 }
 
-/* ================= 批量启停（跨模块聚合选择） ================= */
-const selectedMap = ref<Record<string, CaseItem[]>>({});   // 模块 -> 该模块表格已选行
-const selected = computed(() => Object.values(selectedMap.value).flat());
+/* ================= 批量启停 ================= */
+const selected = ref<CaseItem[]>([]);
 const batching = ref(false);
 
-function onModuleSel(module: string, rows: CaseItem[]) {
-  if (rows.length) selectedMap.value[module] = rows;
-  else delete selectedMap.value[module];
+function onSelectionChange(rows: CaseItem[]) {
+  selected.value = rows;
 }
 
 /** 批量启用/停用：串行逐个写回 Excel（同一文件不能并发写，避开行锁漂移与互相覆盖） */
@@ -409,117 +421,131 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div>
-    <el-card shadow="never" style="margin-bottom: 12px">
-      <el-form inline @submit.prevent>
-        <el-form-item label="模块">
-          <el-input v-model="filters.module" placeholder="包含匹配" clearable style="width: 140px" />
-        </el-form-item>
-        <el-form-item label="优先级">
-          <el-select v-model="filters.priority" multiple collapse-tags placeholder="全部" style="width: 180px">
-            <el-option v-for="p in prioOptions()" :key="p" :label="p" :value="p" />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="关键字">
-          <el-input v-model="filters.keyword" placeholder="编号/接口名/描述/URL" clearable style="width: 180px" />
-        </el-form-item>
-        <el-form-item label="仅启用">
-          <el-switch v-model="filters.onlyEnabled" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="search">查询</el-button>
-          <el-button @click="reset">重置</el-button>
-          <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
-        </el-form-item>
-      </el-form>
+  <div class="case-page">
+    <!-- 左侧：模块导航（相同模块的用例归到一起，点击即只看该模块） -->
+    <el-card shadow="never" class="mod-panel">
+      <div class="mod-panel-head">模块</div>
+      <ul class="mod-list">
+        <li :class="{ active: activeModule === '' }" @click="selectModule('')">
+          <span class="mod-name">全部用例</span>
+          <span class="mod-cnt">{{ total }}</span>
+        </li>
+        <li v-for="m in modules" :key="m.name" :class="{ active: activeModule === m.name }" @click="selectModule(m.name)">
+          <span class="mod-name" :title="m.name">{{ m.name }}</span>
+          <span class="mod-cnt">{{ m.count }}</span>
+        </li>
+      </ul>
     </el-card>
 
-    <el-card shadow="never">
-      <div v-if="selected.length" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center">
-        <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条</span>
-        <el-button size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
-        <el-button size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
-      </div>
-      <el-empty v-if="!loading && !groupedCases.length" description="没有符合条件的用例" />
-      <el-collapse v-else v-model="activeModules" v-loading="loading">
-        <el-collapse-item v-for="grp in groupedCases" :key="grp.module" :name="grp.module">
-          <template #title>
-            <span class="grp-title">{{ grp.module }}</span>
-            <el-tag size="small" type="info" style="margin-left: 8px">{{ grp.items.length }} 条</el-tag>
-          </template>
-          <el-table
-            :key="grp.module + ':' + tableKey"
-            :data="grp.items"
-            row-key="case_id"
-            size="small"
-            @selection-change="(rows) => onModuleSel(grp.module, rows)"
-          >
-            <el-table-column type="expand">
-              <template #default="{ row }">
-                <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
-                  <el-descriptions-item label="Headers">
-                    <pre class="json">{{ fmt(row.headers) }}</pre>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="查询参数">
-                    <pre class="json">{{ fmt(row.params) }}</pre>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="请求体">
-                    <pre class="json">{{ fmt(row.body) }}</pre>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="变量提取">
-                    <pre class="json">{{ fmt(row.extract) }}</pre>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="断言">
-                    <pre class="json">{{ fmt(row.asserts) }}</pre>
-                  </el-descriptions-item>
-                  <el-descriptions-item label="来源">
-                    {{ row.source }} 第 {{ row.row }} 行 ｜ 超时 {{ row.timeout ?? "默认" }}
-                  </el-descriptions-item>
-                </el-descriptions>
-              </template>
-            </el-table-column>
-            <el-table-column type="selection" width="45" />
-            <el-table-column prop="case_id" label="用例编号" min-width="150">
-              <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
-            </el-table-column>
-            <el-table-column prop="api_name" label="接口名称" min-width="140" />
-            <el-table-column prop="case_desc" label="用例描述" min-width="180" show-overflow-tooltip />
-            <el-table-column prop="module" label="模块" width="120" />
-            <el-table-column label="优先级" width="80">
-              <template #default="{ row }"><el-tag :type="prioType(row.priority)" size="small">{{ row.priority }}</el-tag></template>
-            </el-table-column>
-            <el-table-column prop="method" label="方法" width="80" />
-            <el-table-column prop="url" label="请求路径" min-width="160">
-              <template #default="{ row }"><span class="mono">{{ row.url }}</span></template>
-            </el-table-column>
-            <el-table-column label="断言数" width="80">
-              <template #default="{ row }">{{ (row.asserts ?? []).length }}</template>
-            </el-table-column>
-            <el-table-column label="启用" width="70">
-              <template #default="{ row }">
-                <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column label="操作" width="165" fixed="right">
-              <template #default="{ row }">
-                <div class="op-cell">
-                  <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
-                  <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
-                  <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
-                    <template #reference>
-                      <el-button size="small" text type="danger">删除</el-button>
-                    </template>
-                  </el-popconfirm>
-                </div>
-              </template>
-            </el-table-column>
-          </el-table>
-        </el-collapse-item>
-      </el-collapse>
-      <div style="margin-top: 10px; color: #909399; font-size: 13px">
-        共 {{ total }} 条 ｜ 数据源：data/api_cases.xlsx（Excel 仍是唯一用例载体，平台编辑直写回 Excel，校验不过不落盘）
-      </div>
-    </el-card>
+    <!-- 右侧：筛选 + 整体分页表格 -->
+    <div class="case-body">
+      <el-card shadow="never" style="margin-bottom: 12px">
+        <el-form inline @submit.prevent>
+          <el-form-item label="优先级">
+            <el-select v-model="filters.priority" multiple collapse-tags placeholder="全部" style="width: 180px">
+              <el-option v-for="p in prioOptions()" :key="p" :label="p" :value="p" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="关键字">
+            <el-input v-model="filters.keyword" placeholder="编号/接口名/描述/URL" clearable style="width: 200px" />
+          </el-form-item>
+          <el-form-item label="仅启用">
+            <el-switch v-model="filters.onlyEnabled" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="search">查询</el-button>
+            <el-button @click="reset">重置</el-button>
+            <el-button type="success" plain @click="openCreate">＋ 新增用例</el-button>
+          </el-form-item>
+        </el-form>
+      </el-card>
+
+      <el-card shadow="never">
+        <div class="table-head">
+          <span class="cur-mod">当前模块：<b>{{ activeModule || "全部用例" }}</b>（{{ visibleCases.length }} 条）</span>
+          <div v-if="selected.length" style="display: flex; gap: 8px; align-items: center">
+            <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条</span>
+            <el-button size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
+            <el-button size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
+          </div>
+        </div>
+        <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
+          <el-table-column type="expand">
+            <template #default="{ row }">
+              <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
+                <el-descriptions-item label="Headers">
+                  <pre class="json">{{ fmt(row.headers) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="查询参数">
+                  <pre class="json">{{ fmt(row.params) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="请求体">
+                  <pre class="json">{{ fmt(row.body) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="变量提取">
+                  <pre class="json">{{ fmt(row.extract) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="断言">
+                  <pre class="json">{{ fmt(row.asserts) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="来源">
+                  {{ row.source }} 第 {{ row.row }} 行 ｜ 超时 {{ row.timeout ?? "默认" }}
+                </el-descriptions-item>
+              </el-descriptions>
+            </template>
+          </el-table-column>
+          <el-table-column type="selection" width="45" />
+          <el-table-column prop="case_id" label="用例编号" min-width="150">
+            <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
+          </el-table-column>
+          <el-table-column prop="api_name" label="接口名称" min-width="140" />
+          <el-table-column prop="case_desc" label="用例描述" min-width="180" show-overflow-tooltip />
+          <el-table-column prop="module" label="模块" width="120" />
+          <el-table-column label="优先级" width="80">
+            <template #default="{ row }"><el-tag :type="prioType(row.priority)" size="small">{{ row.priority }}</el-tag></template>
+          </el-table-column>
+          <el-table-column prop="method" label="方法" width="80" />
+          <el-table-column prop="url" label="请求路径" min-width="160">
+            <template #default="{ row }"><span class="mono">{{ row.url }}</span></template>
+          </el-table-column>
+          <el-table-column label="断言数" width="80">
+            <template #default="{ row }">{{ (row.asserts ?? []).length }}</template>
+          </el-table-column>
+          <el-table-column label="启用" width="70">
+            <template #default="{ row }">
+              <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="165" fixed="right">
+            <template #default="{ row }">
+              <div class="op-cell">
+                <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
+                <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
+                <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
+                  <template #reference>
+                    <el-button size="small" text type="danger">删除</el-button>
+                  </template>
+                </el-popconfirm>
+              </div>
+            </template>
+          </el-table-column>
+        </el-table>
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="visibleCases.length"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          size="small"
+          style="margin-top: 12px; justify-content: flex-end"
+          @size-change="currentPage = 1"
+        />
+        <div style="margin-top: 10px; color: #909399; font-size: 13px">
+          共 {{ total }} 条 ｜ 数据源：data/api_cases.xlsx（Excel 仍是唯一用例载体，平台编辑直写回 Excel，校验不过不落盘）
+        </div>
+      </el-card>
+    </div>
 
     <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
     <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? (copyFrom ? '复制新增用例' : '新增用例') : `编辑用例 ${editing?.case_id ?? ''}`">
@@ -640,6 +666,21 @@ onMounted(async () => {
 .op-cell { display: flex; align-items: center; gap: 2px; white-space: nowrap; }
 .op-cell .el-button + .el-button { margin-left: 0; }
 .grp-title { font-weight: 600; font-size: 13px; }
+/* 主从布局：左侧模块导航 + 右侧分页表格 */
+.case-page { display: flex; align-items: flex-start; gap: 12px; }
+.mod-panel { width: 200px; flex: 0 0 200px; }
+.mod-panel :deep(.el-card__body) { padding: 8px; }
+.mod-panel-head { font-weight: 600; font-size: 13px; color: #303133; padding: 4px 8px 8px; }
+.mod-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 180px); overflow: auto; }
+.mod-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #606266; }
+.mod-list li:hover { background: #f0f2f5; }
+.mod-list li.active { background: #409eff; color: #fff; font-weight: 600; }
+.mod-list li.active .mod-cnt { background: rgba(255, 255, 255, 0.25); color: #fff; }
+.mod-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mod-cnt { flex: 0 0 auto; min-width: 22px; text-align: center; font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: 9px; background: #ecf0f5; color: #909399; }
+.case-body { flex: 1; min-width: 0; }
+.table-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.cur-mod { color: #606266; font-size: 13px; }
 .opt-key { float: left; }
 .opt-val { float: right; color: #a0a4a8; font-size: 12px; margin-left: 16px; }
 .var-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
