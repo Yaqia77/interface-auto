@@ -73,25 +73,53 @@ function goReport(run: RunItem) {
   if (run.source === "api" && ["passed", "failed"].includes(run.status)) router.push({ path: "/report", query: { runId: run.run_id } });
   else if (run.report_dir) router.push({ path: "/report", query: { runId: run.run_id } });
 }
+
+/** 联动入口：带筛选条件跳用例管理（优先级条/模块/KPI 卡调用） */
+function goCases(query: Record<string, string | undefined>) {
+  router.push({ path: "/cases", query });
+}
+
+/** 重跑该批次条件：用批次 args 里的模块/优先级/关键字预填执行中心 */
+function goRerun(run: RunItem) {
+  const a = (run.args ?? {}) as Record<string, unknown>;
+  router.push({
+    path: "/execution",
+    query: {
+      module: a.module ? String(a.module) : undefined,
+      priority: a.priority ? String(a.priority) : undefined,
+      keyword: a.keyword ? String(a.keyword) : undefined,
+    },
+  });
+}
+
+/** 本批次可重跑条件的人读摘要（悬停提示用） */
+function rerunSummary(run: RunItem): string {
+  const a = (run.args ?? {}) as Record<string, unknown>;
+  const parts: string[] = [];
+  if (a.module) parts.push(`模块=${a.module}`);
+  if (a.priority) parts.push(`优先级=${a.priority}`);
+  if (a.keyword) parts.push(`关键字=${a.keyword}`);
+  return parts.length ? parts.join("，") : "全量（无筛选条件）";
+}
 </script>
 
 <template>
   <div v-loading="loading">
     <el-row :gutter="12">
       <el-col :span="6">
-        <el-card shadow="never" class="kpi">
+        <el-card shadow="never" class="kpi kpi-link" @click="goCases({})">
           <div class="kpi-num">{{ cases.length }}</div>
           <div class="kpi-label">用例总数（启用 {{ enabled }}）</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card shadow="never" class="kpi">
+        <el-card shadow="never" class="kpi kpi-link" @click="goCases({})">
           <div class="kpi-num">{{ modules }}</div>
           <div class="kpi-label">模块数</div>
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card shadow="never" class="kpi">
+        <el-card shadow="never" class="kpi" :class="{ 'kpi-link': !!lastDone }" @click="lastDone && goReport(lastDone)">
           <div class="kpi-num" :style="{ color: lastDone?.status === 'passed' ? '#67c23a' : '#f56c6c' }">
             {{ lastDone ? lastDone.status : "—" }}
           </div>
@@ -99,7 +127,7 @@ function goReport(run: RunItem) {
         </el-card>
       </el-col>
       <el-col :span="6">
-        <el-card shadow="never" class="kpi">
+        <el-card shadow="never" class="kpi kpi-link" @click="router.push('/execution')">
           <div class="kpi-num">{{ finishedStats.rate == null ? "—" : finishedStats.rate + "%" }}</div>
           <div class="kpi-label">近 {{ finishedStats.total }} 次已完成批次通过率</div>
         </el-card>
@@ -128,8 +156,8 @@ function goReport(run: RunItem) {
 
     <el-row :gutter="12" style="margin-top: 12px">
       <el-col :span="8">
-        <el-card shadow="never" header="优先级分布">
-          <div v-for="b in prioBars" :key="b.p" class="bar-row">
+        <el-card shadow="never" header="优先级分布（点击某优先级→查看对应用例）">
+          <div v-for="b in prioBars" :key="b.p" class="bar-row bar-link" @click="goCases({ priority: b.p })">
             <span class="bar-label mono">{{ b.p }}</span>
             <div class="bar-track"><div class="bar-fill" :style="{ width: b.pct + '%', background: prioColor[b.p] }" /></div>
             <span class="bar-num">{{ b.n }}</span>
@@ -157,8 +185,11 @@ function goReport(run: RunItem) {
               <template #default="{ row }"><el-tag :type="statusType(row.status)" size="small">{{ row.status }}</el-tag></template>
             </el-table-column>
             <el-table-column prop="started_at" label="开始时间" width="150" />
-            <el-table-column label="操作" width="80">
+            <el-table-column label="操作" width="150">
               <template #default="{ row }">
+                <el-tooltip :content="'重跑条件：' + rerunSummary(row)" placement="top">
+                  <el-button size="small" text type="warning" :disabled="row.source !== 'api'" @click="goRerun(row)">重跑</el-button>
+                </el-tooltip>
                 <el-button size="small" text type="primary" :disabled="!row.report_dir" @click="goReport(row)">报告</el-button>
               </template>
             </el-table-column>
@@ -171,10 +202,14 @@ function goReport(run: RunItem) {
 
 <style scoped>
 .kpi { text-align: center; }
+.kpi-link { cursor: pointer; transition: box-shadow 0.15s ease, transform 0.15s ease; }
+.kpi-link:hover { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12); transform: translateY(-2px); }
 .kpi-num { font-size: 30px; font-weight: 700; line-height: 1.3; }
 .kpi-label { color: #909399; font-size: 12px; margin-top: 2px; }
 .mono { font-family: Consolas, Monaco, monospace; font-size: 12px; }
 .bar-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.bar-link { cursor: pointer; border-radius: 6px; padding: 2px 4px; margin: 0 -4px 6px; transition: background 0.15s ease; }
+.bar-link:hover { background: #f5f7fa; }
 .bar-label { width: 26px; }
 .bar-track { flex: 1; height: 12px; background: #f0f2f5; border-radius: 6px; overflow: hidden; }
 .bar-fill { height: 100%; border-radius: 6px; transition: width 0.3s ease; }

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 /** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
 import { computed, onMounted, reactive, ref } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { CaseItem, CaseMeta } from "../types";
 
 const router = useRouter();
+const route = useRoute();
+const carried = ref("");   // 从工作台等页面携带过来的筛选条件描述（非空则顶部提示）
 
 const loading = ref(false);
 const cases = ref<CaseItem[]>([]);
@@ -73,6 +75,16 @@ function reset() {
   filters.keyword = "";
   filters.onlyEnabled = true;
   activeModule.value = "";
+  search();
+}
+
+/** 清除从工作台携带过来的筛选条件，回到默认视图 */
+function clearCarried() {
+  filters.priority = [];
+  filters.keyword = "";
+  activeModule.value = "";
+  carried.value = "";
+  router.replace({ path: "/cases" });
   search();
 }
 
@@ -430,6 +442,18 @@ async function removeCase(row: CaseItem) {
 }
 
 onMounted(async () => {
+  // 从工作台（优先级条/模块/KPI）带参跳转而来：预填模块/优先级/关键字
+  const q = route.query;
+  if (q.module || q.priority || q.keyword) {
+    if (q.module) activeModule.value = String(q.module);
+    if (q.priority) filters.priority = String(q.priority).split(",").map((s) => s.trim()).filter(Boolean);
+    if (q.keyword) filters.keyword = String(q.keyword);
+    const parts: string[] = [];
+    if (q.module) parts.push(`模块=${q.module}`);
+    if (q.priority) parts.push(`优先级=${q.priority}`);
+    if (q.keyword) parts.push(`关键字=${q.keyword}`);
+    carried.value = parts.join("，");
+  }
   search();
   try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
 });
@@ -454,6 +478,20 @@ onMounted(async () => {
 
     <!-- 右侧：筛选 + 整体分页表格 -->
     <div class="case-body">
+      <el-alert
+        v-if="carried"
+        type="warning"
+        :closable="false"
+        show-icon
+        style="margin-bottom: 12px"
+        title="已按工作台条件筛选"
+      >
+        <template #default>
+          <div style="font-size: 12px">{{ carried }}；下方列表与左侧模块已按此范围限定。
+            <el-button link type="primary" size="small" @click="clearCarried">清除条件</el-button>
+          </div>
+        </template>
+      </el-alert>
       <el-card shadow="never" style="margin-bottom: 12px">
         <el-form inline @submit.prevent>
           <el-form-item label="优先级">
