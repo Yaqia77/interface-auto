@@ -144,3 +144,40 @@ class PlanOut(BaseModel):
     updated_at: str
     last_run_id: str | None = None
     last_run_at: str | None = None
+
+
+# ==================== Webhook 通知 ====================
+
+
+class WebhookCreate(BaseModel):
+    """新建 Webhook 通知配置。"""
+
+    name: str = Field(description="配置名称（便于识别）")
+    url: str = Field(description="Webhook 地址")
+    type: str = Field(default="custom", description="wechat_work / feishu / custom")
+    events: list[str] = Field(default=["run_fail", "run_error"],
+                              description="触发事件: run_pass / run_fail / run_error")
+    enabled: bool = True
+
+
+class WebhookUpdate(BaseModel):
+    """更新 Webhook（只传需修改字段）。"""
+
+    name: str | None = None
+    url: str | None = None
+    type: str | None = None
+    events: list[str] | None = None
+    enabled: bool | None = None
+
+
+class WebhookOut(BaseModel):
+    """Webhook 对外视图。"""
+
+    id: str
+    name: str
+    url: str
+    type: str
+    events: list[str]
+    enabled: bool
+    created_at: str
+    updated_at: str

@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -154,4 +154,20 @@ export const api = {
         { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
       .then((r) => r.data);
   },
+
+  /* ---------- Webhook 通知管理 ---------- */
+  listWebhooks: () => http.get<WebhookItem[]>("/webhooks").then((r) => r.data),
+
+  createWebhook: (body: WebhookCreateReq) =>
+    http.post<WebhookItem>("/webhooks", body).then((r) => r.data),
+
+  updateWebhook: (id: string, body: WebhookUpdateReq) =>
+    http.put<WebhookItem>(`/webhooks/${encodeURIComponent(id)}`, body).then((r) => r.data),
+
+  deleteWebhook: (id: string) =>
+    http.delete<{ ok: boolean }>(`/webhooks/${encodeURIComponent(id)}`).then((r) => r.data),
+
+  testWebhook: (id: string) =>
+    http.post<{ ok: boolean; status_code: number; response: string }>(
+      `/webhooks/${encodeURIComponent(id)}/test`).then((r) => r.data),
 };

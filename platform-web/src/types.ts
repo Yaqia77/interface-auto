@@ -184,3 +184,31 @@ export interface PlanUpdateReq {
   case_ids?: string[];
   env?: string;
 }
+
+/** Webhook 通知配置（/api/webhooks） */
+export interface WebhookItem {
+  id: string;
+  name: string;
+  url: string;
+  type: "wechat_work" | "feishu" | "custom";
+  events: string[];
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WebhookCreateReq {
+  name: string;
+  url: string;
+  type?: string;
+  events?: string[];
+  enabled?: boolean;
+}
+
+export interface WebhookUpdateReq {
+  name?: string;
+  url?: string;
+  type?: string;
+  events?: string[];
+  enabled?: boolean;
+}

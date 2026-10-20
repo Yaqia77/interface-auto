@@ -44,6 +44,7 @@ onMounted(async () => {
         <el-menu-item-group label="配置中心">
           <el-menu-item index="/envs">🌐 环境配置</el-menu-item>
           <el-menu-item index="/secrets">🔑 凭证管理</el-menu-item>
+          <el-menu-item index="/notifications">🔔 通知配置</el-menu-item>
         </el-menu-item-group>
       </el-menu>
       <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>

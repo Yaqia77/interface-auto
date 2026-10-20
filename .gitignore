@@ -22,6 +22,9 @@ data/secret_vars.xlsx
 # 测试场景运行时数据（用户创建的场景存储，不入库）
 data/plans.json
 
+# Webhook 通知配置（用户创建的推送规则，不入库）
+data/webhooks.json
+
 # Excel 打开时的临时文件
 ~$*
 

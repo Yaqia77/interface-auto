@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import config_writer
-from backend.routers import cases, plans, runs, secrets
+from backend.routers import cases, notifications, plans, runs, secrets
 from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
@@ -32,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(cases.router)
+app.include_router(notifications.router)
 app.include_router(plans.router)
 app.include_router(runs.router)
 app.include_router(secrets.router)

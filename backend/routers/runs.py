@@ -86,6 +86,43 @@ def _load_history() -> None:
 _REPORT_DIR_RE = re.compile(r"\[interface-auto\] 报告目录:\s*(.+)$")
 
 
+def _fire_notification(rec: dict) -> None:
+    """批次完成后发送 Webhook 通知（失败不影响主流程）。"""
+    try:
+        from backend.notifier import send_run_summary
+        status = _status_from(rec)
+        # 尝试从 allure-results 获取用例统计
+        total = passed = failed = 0
+        report_dir = rec.get("report_dir")
+        if report_dir:
+            results = ROOT / report_dir / "allure-results"
+            if results.is_dir():
+                cases_info = allure_store.list_cases(results)
+                total = cases_info.get("total", 0)
+                stats = cases_info.get("stats", {})
+                passed = stats.get("passed", 0)
+                failed = stats.get("failed", 0) + stats.get("broken", 0)
+        # 计算耗时
+        duration = ""
+        if rec.get("started_at") and rec.get("finished_at"):
+            from datetime import datetime as _dt
+            t0 = _dt.fromisoformat(rec["started_at"])
+            t1 = _dt.fromisoformat(rec["finished_at"])
+            duration = f"{int((t1 - t0).total_seconds())}s"
+        payload = {
+            "run_id": rec["run_id"],
+            "status": status,
+            "total": total,
+            "passed": passed,
+            "failed": failed,
+            "duration": duration,
+            "env": (rec.get("args") or {}).get("env", "-"),
+        }
+        send_run_summary(payload)
+    except Exception:
+        pass  # 通知失败不影响主流程
+
+
 def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -139,6 +176,8 @@ def _worker(run_id: str, cmd: list[str]):
         if rec["status"] == "running":
             rec["status"] = _status_from(rec)
         _persist(rec)
+        # 批次完成后触发 Webhook 通知
+        _fire_notification(rec)
 
 
 @router.post("", response_model=RunOut, summary="发起执行批次", status_code=202)
