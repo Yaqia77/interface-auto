@@ -115,6 +115,41 @@ function queryModules(qs: string, cb: (r: { value: string }[]) => void) {
   cb(mods.filter((m) => !q || m.toLowerCase().includes(q)).map((m) => ({ value: m })));
 }
 
+/* ================= 批量启停 ================= */
+const selected = ref<CaseItem[]>([]);
+const batching = ref(false);
+
+function onSelectionChange(rows: CaseItem[]) {
+  selected.value = rows;
+}
+
+/** 批量启用/停用：串行逐个写回 Excel（同一文件不能并发写，避开行锁漂移与互相覆盖） */
+async function batchRun(val: boolean) {
+  const targets = selected.value.filter((c) => c.run !== val);
+  if (!targets.length) {
+    ElMessage.info(val ? "所选用例均已启用" : "所选用例均已停用");
+    return;
+  }
+  batching.value = true;
+  let ok = 0;
+  const failed: string[] = [];
+  for (const c of targets) {
+    try {
+      await api.updateCase(c.case_id, { run: val });
+      ok++;
+    } catch {
+      failed.push(c.case_id);  // 拦截器已逐条提示后端 detail
+    }
+  }
+  batching.value = false;
+  if (failed.length) {
+    ElMessage.warning(`已${val ? "启用" : "停用"} ${ok} 条，失败 ${failed.length} 条（${failed.join(", ")}）`);
+  } else {
+    ElMessage.success(`已${val ? "启用" : "停用"} ${ok} 条用例并写回 Excel`);
+  }
+  await search();
+}
+
 /* ---------- 行数据 ⇄ JSON 值 转换 ---------- */
 
 const objToRows = (o: Record<string, unknown> | null): KvRow[] =>
@@ -405,7 +440,12 @@ onMounted(async () => {
     </el-card>
 
     <el-card shadow="never">
-      <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" :span-method="spanMethod">
+      <div v-if="selected.length" style="margin-bottom: 10px; display: flex; gap: 8px; align-items: center">
+        <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条</span>
+        <el-button size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
+        <el-button size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
+      </div>
+      <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" :span-method="spanMethod" @selection-change="onSelectionChange">
         <el-table-column type="expand">
           <template #default="{ row }">
             <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
@@ -430,6 +470,7 @@ onMounted(async () => {
             </el-descriptions>
           </template>
         </el-table-column>
+        <el-table-column type="selection" width="45" />
         <el-table-column prop="case_id" label="用例编号" min-width="150">
           <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
         </el-table-column>
