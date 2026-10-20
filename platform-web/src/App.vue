@@ -31,6 +31,7 @@ onMounted(async () => {
       <el-menu router :default-active="activeMenu" class="side-menu">
         <el-menu-item-group label="概览">
           <el-menu-item index="/dashboard">📊 工作台</el-menu-item>
+          <el-menu-item index="/stats">📉 统计报表</el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group label="测试管理">
           <el-menu-item index="/cases">📋 用例管理</el-menu-item>
