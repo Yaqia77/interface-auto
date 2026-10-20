@@ -34,6 +34,7 @@ onMounted(async () => {
         </el-menu-item-group>
         <el-menu-item-group label="测试管理">
           <el-menu-item index="/cases">📋 用例管理</el-menu-item>
+          <el-menu-item index="/plans">📁 测试场景</el-menu-item>
         </el-menu-item-group>
         <el-menu-item-group label="执行与报告">
           <el-menu-item index="/execution">🚀 执行中心</el-menu-item>

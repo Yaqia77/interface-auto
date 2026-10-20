@@ -157,3 +157,30 @@ export interface CaseHistoryResp {
   consec_fail: number;
   history: CaseHistoryEntry[];
 }
+
+/** 测试场景（/api/plans） */
+export interface PlanItem {
+  id: string;
+  name: string;
+  desc: string;
+  case_ids: string[];
+  env: string;
+  created_at: string;
+  updated_at: string;
+  last_run_id: string | null;
+  last_run_at: string | null;
+}
+
+export interface PlanCreateReq {
+  name: string;
+  desc?: string;
+  case_ids: string[];
+  env?: string;
+}
+
+export interface PlanUpdateReq {
+  name?: string;
+  desc?: string;
+  case_ids?: string[];
+  env?: string;
+}

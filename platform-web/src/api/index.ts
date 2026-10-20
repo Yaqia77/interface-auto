@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -120,4 +120,23 @@ export const api = {
     http
       .delete<SecretsResp>(`/secrets/${encodeURIComponent(name)}`)
       .then((r) => r.data),
+
+  /* ---------- 测试场景 ---------- */
+  listPlans: () => http.get<PlanItem[]>("/plans").then((r) => r.data),
+
+  createPlan: (body: PlanCreateReq) =>
+    http.post<PlanItem>("/plans", body).then((r) => r.data),
+
+  getPlan: (id: string) =>
+    http.get<PlanItem>(`/plans/${encodeURIComponent(id)}`).then((r) => r.data),
+
+  updatePlan: (id: string, body: PlanUpdateReq) =>
+    http.put<PlanItem>(`/plans/${encodeURIComponent(id)}`, body).then((r) => r.data),
+
+  deletePlan: (id: string) =>
+    http.delete<{ ok: boolean }>(`/plans/${encodeURIComponent(id)}`).then((r) => r.data),
+
+  /** 按场景发起执行，返回新批次 RunItem */
+  runPlan: (id: string) =>
+    http.post<RunItem>(`/plans/${encodeURIComponent(id)}/run`).then((r) => r.data),
 };

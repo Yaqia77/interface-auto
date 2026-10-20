@@ -112,3 +112,35 @@ class EnvsUpdate(BaseModel):
 
     default_env: str = Field(description="默认环境名，必须是 envs 之一")
     envs: list[EnvItem] = Field(description="完整环境列表（至少一个）")
+
+
+class PlanCreate(BaseModel):
+    """新建测试场景。"""
+
+    name: str = Field(description="场景名称")
+    desc: str = Field(default="", description="场景描述")
+    case_ids: list[str] = Field(description="用例编号列表（至少一条）")
+    env: str = Field(default="", description="偏好环境名（空则用默认环境）")
+
+
+class PlanUpdate(BaseModel):
+    """更新场景（只传需要修改的字段）。"""
+
+    name: str | None = None
+    desc: str | None = None
+    case_ids: list[str] | None = None
+    env: str | None = None
+
+
+class PlanOut(BaseModel):
+    """场景对外视图。"""
+
+    id: str
+    name: str
+    desc: str
+    case_ids: list[str]
+    env: str
+    created_at: str
+    updated_at: str
+    last_run_id: str | None = None
+    last_run_at: str | None = None
