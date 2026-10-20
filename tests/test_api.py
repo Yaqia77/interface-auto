@@ -15,7 +15,7 @@ except ImportError:  # 未安装 allure-pytest 时跳过增强报告
 SEVERITY = {"P0": "blocker", "P1": "critical", "P2": "major", "P3": "minor"}
 
 
-def test_api(api_case, executor, context):
+def test_api(api_case, executor, context, dep_map, case_results):
     if HAS_ALLURE:
         allure.dynamic.title(f"[{api_case.priority}] {api_case.case_id} {api_case.api_name}")
         allure.dynamic.feature(api_case.module)
@@ -24,6 +24,15 @@ def test_api(api_case, executor, context):
 
     if not api_case.run:
         pytest.skip("是否执行=N，跳过")
+
+    # 依赖链检查：前置用例必须全部通过
+    deps = dep_map.get(api_case.case_id, [])
+    if deps:
+        failed_deps = [d for d in deps if case_results.get(d) not in ("passed", None)]
+        # None = 该依赖未在本次执行范围内，不强制检查
+        if failed_deps:
+            case_results[api_case.case_id] = "skipped"
+            pytest.skip(f"依赖用例未通过: {', '.join(failed_deps)}")
 
     runner = CaseRunner(executor, context)
     start = time.perf_counter()
@@ -39,7 +48,10 @@ def test_api(api_case, executor, context):
             _attach_assertions(result.assertions)
 
     if not result.ok:
+        case_results[api_case.case_id] = "failed"
         raise AssertionError(result.error)
+    else:
+        case_results[api_case.case_id] = "passed"
 
 
 def _attach(snapshot: dict, name: str):

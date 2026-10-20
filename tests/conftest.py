@@ -131,3 +131,22 @@ def executor(app_config):
         default_timeout=env.get("timeout", 15),
         verify_ssl=env.get("verify_ssl", True),
     )
+
+
+@pytest.fixture(scope="session")
+def dep_map():
+    """加载用例依赖映射（data/dependencies.json）。"""
+    dep_file = ROOT / "data" / "dependencies.json"
+    if not dep_file.exists():
+        return {}
+    try:
+        with open(dep_file, encoding="utf-8") as fp:
+            return json.load(fp)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+@pytest.fixture(scope="session")
+def case_results():
+    """Session 级用例结果登记表，供依赖链检查。"""
+    return {}  # {case_id: "passed" | "failed" | "skipped" | "error"}

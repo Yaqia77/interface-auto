@@ -190,4 +190,15 @@ export const api = {
     http.get<{ cron: string; next_runs: string[] }>("/schedules/preview/next-runs", {
       params: { cron, n },
     }).then((r) => r.data),
+
+  /* ---------- 用例依赖 ---------- */
+  getAllDeps: () => http.get<Record<string, string[]>>("/dependencies").then((r) => r.data),
+
+  getDeps: (caseId: string) =>
+    http.get<{ case_id: string; dependencies: string[] }>(
+      `/dependencies/${encodeURIComponent(caseId)}`).then((r) => r.data),
+
+  setDeps: (caseId: string, deps: string[]) =>
+    http.put<{ case_id: string; dependencies: string[] }>(
+      `/dependencies/${encodeURIComponent(caseId)}`, { dependencies: deps }).then((r) => r.data),
 };

@@ -523,6 +523,40 @@ function histOpenRun(runId: string) {
   router.push({ path: "/report", query: { runId, caseId: histRow.value?.case_id } });
 }
 
+/* ================= 用例依赖管理 ================= */
+const depVisible = ref(false);
+const depCaseId = ref("");
+const depList = ref<string[]>([]);
+const depInput = ref("");
+const allCaseIds = computed(() => cases.value.map(c => c.case_id));
+
+async function openDeps(row: CaseItem) {
+  depCaseId.value = row.case_id;
+  depVisible.value = true;
+  try {
+    const resp = await api.getDeps(row.case_id);
+    depList.value = resp.dependencies;
+  } catch {
+    depList.value = [];
+  }
+}
+
+async function saveDeps() {
+  try {
+    await api.setDeps(depCaseId.value, depList.value);
+    ElMessage.success("依赖已保存");
+    depVisible.value = false;
+  } catch { /* 拦截器提示 */ }
+}
+
+function addDep() {
+  const v = depInput.value.trim();
+  if (v && v !== depCaseId.value && !depList.value.includes(v)) {
+    depList.value.push(v);
+  }
+  depInput.value = "";
+}
+
 onMounted(async () => {
   // 从工作台（优先级条/模块/KPI）带参跳转而来：预填模块/优先级/关键字
   const q = route.query;
@@ -655,12 +689,13 @@ onMounted(async () => {
               <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="205" fixed="right">
+          <el-table-column label="操作" width="240" fixed="right">
             <template #default="{ row }">
               <div class="op-cell">
                 <el-button size="small" text type="primary" @click="openHistory(row)">历史</el-button>
                 <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
                 <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
+                <el-button size="small" text type="warning" @click="openDeps(row)">依赖</el-button>
                 <el-popconfirm :title="'删除 ' + row.case_id + '？将从 Excel 整行移除'" width="260">
                   <template #reference>
                     <el-button size="small" text type="danger">删除</el-button>
@@ -840,6 +875,23 @@ onMounted(async () => {
         </el-empty>
       </div>
     </el-drawer>
+
+    <!-- 用例依赖管理弹窗 -->
+    <el-dialog v-model="depVisible" :title="`配置依赖 ${depCaseId}`" width="480px">
+      <p style="color:#606266; font-size:13px; margin:0 0 12px">执行此用例前，以下前置用例必须全部通过。留空表示无依赖。</p>
+      <div v-for="(d, i) in depList" :key="i" style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
+        <el-tag closable @close="depList.splice(i, 1)">{{ d }}</el-tag>
+      </div>
+      <el-select v-model="depInput" filterable allow-create default-first-option placeholder="输入或选择前置用例 ID"
+                 style="width: 100%; margin-top: 8px" @keyup.enter="addDep">
+        <el-option v-for="cid in allCaseIds.filter(c => c !== depCaseId && !depList.includes(c))" :key="cid" :label="cid" :value="cid" />
+      </el-select>
+      <el-button size="small" style="margin-top:8px" @click="addDep">＋ 添加</el-button>
+      <template #footer>
+        <el-button @click="depVisible = false">取消</el-button>
+        <el-button type="primary" @click="saveDeps">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

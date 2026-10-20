@@ -220,3 +220,12 @@ class ScheduleOut(BaseModel):
     next_run_at: str | None = None
     created_at: str
     updated_at: str
+
+
+# ==================== 用例依赖 ====================
+
+
+class DepsSetRequest(BaseModel):
+    """设置用例依赖列表。"""
+
+    dependencies: list[str] = Field(description="前置依赖用例 ID 列表")

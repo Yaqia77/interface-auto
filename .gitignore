@@ -28,6 +28,9 @@ data/webhooks.json
 # 定时任务配置（用户创建的调度计划，不入库）
 data/schedules.json
 
+# 用例依赖关系（用户配置的依赖链，不入库）
+data/dependencies.json
+
 # Excel 打开时的临时文件
 ~$*
 
