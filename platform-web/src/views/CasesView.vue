@@ -108,6 +108,13 @@ const varChip = (v: string) => "{{" + v + "}}";
 const prioOptions = () => meta.value?.priorities ?? ["P0", "P1", "P2", "P3", "P4", "P5"];
 const methodOptions = () => meta.value?.methods ?? ["GET", "POST", "PUT", "DELETE", "PATCH"];
 
+/** 模块候选：自由文本输入，已有模块作为下拉提示（模块不受限定，输入任意名称即归入新模块） */
+function queryModules(qs: string, cb: (r: { value: string }[]) => void) {
+  const q = (qs || "").trim().toLowerCase();
+  const mods = meta.value?.modules ?? [];
+  cb(mods.filter((m) => !q || m.toLowerCase().includes(q)).map((m) => ({ value: m })));
+}
+
 /* ---------- 行数据 ⇄ JSON 值 转换 ---------- */
 
 const objToRows = (o: Record<string, unknown> | null): KvRow[] =>
@@ -444,7 +451,7 @@ onMounted(async () => {
             <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="170">
+        <el-table-column label="操作" width="170" fixed="right">
           <template #default="{ row }">
             <el-button size="small" text type="primary" @click="openEdit(row)">编辑</el-button>
             <el-button size="small" text type="primary" @click="openCopy(row)">复制</el-button>
@@ -481,9 +488,14 @@ onMounted(async () => {
                     :placeholder="copyFrom ? `新编号（原 ${copyFrom} 的配置已预填）` : '唯一编号，如 album_list_002（创建后不可改）'" />
         </el-form-item>
         <el-form-item label="模块">
-          <el-select v-model="form.module" filterable allow-create default-first-option placeholder="选择或输入新模块" style="width: 100%">
-            <el-option v-for="m in meta?.modules ?? []" :key="m" :label="m" :value="m" />
-          </el-select>
+          <el-autocomplete
+            v-model="form.module"
+            :fetch-suggestions="queryModules"
+            placeholder="输入任意模块名，或从候选中选已有模块"
+            clearable
+            style="width: 100%"
+          />
+          <div class="hint" style="margin: 4px 0 0">模块为自由文本：输入新名称并回车即归入全新模块（不限于下方候选）。</div>
         </el-form-item>
         <el-form-item label="接口名称">
           <el-input v-model="form.api_name" />
