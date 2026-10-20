@@ -161,6 +161,9 @@ async function load() {
       runs.value = await api.listRuns(50);
       pickDefaultBaseline();
     } catch { runs.value = []; }
+    // 支持 ?caseId= 直达某用例详情抽屉（工作台失败 TOP 跳转）
+    const qCase = route.query.caseId as string | undefined;
+    if (qCase) { const row = cases.value.find((c) => c.case_id === qCase); if (row) openDetail(row); }
   } finally {
     loading.value = false;
   }
