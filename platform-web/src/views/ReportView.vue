@@ -1,6 +1,6 @@
 <script setup lang="ts">
-/** 批次报告页（按原型重构）：批次概览 + 用例明细筛选 + 失败归类 + 执行详情抽屉（请求/响应/断言逐条/日志）+ Allure 内嵌。 */
-import { computed, onMounted, ref } from "vue";
+/** 批次报告页（按原型重构）：无 runId 时落批次列表；有则展示批次概览 + 用例明细筛选 + 失败归类 + 执行详情抽屉 + Allure + 与上批次对比。 */
+import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import type { RunCaseDetail, RunCaseSummary, RunItem } from "../types";
@@ -15,6 +15,23 @@ const cases = ref<RunCaseSummary[]>([]);
 const stats = ref<Record<string, number>>({});
 const total = ref(0);
 const batch = ref<RunItem | null>(null);   // api 批次详情（cli 取不到为 null）
+
+/* ================= 批次列表（无 runId 时的落地页，侧栏“报告详情”入口） ================= */
+const listMode = computed(() => !runId.value);
+const runList = ref<RunItem[]>([]);
+const runStatusType = (s: string) =>
+  (({ passed: "success", failed: "danger", error: "danger", running: "warning", pending: "info", broken: "warning" } as Record<string, any>)[s] ?? "info");
+function argsText(a: Record<string, unknown> | null): string {
+  if (!a) return "—";
+  const parts = ["env", "module", "priority", "keyword"].map((k) => a[k]).filter(Boolean);
+  return parts.length ? parts.join(" · ") : "全量";
+}
+async function loadRunList() {
+  loading.value = true;
+  try { runList.value = await api.listRuns(50); }
+  finally { loading.value = false; }
+}
+function openRun(rid: string) { router.push({ path: "/report", query: { runId: rid } }); }
 
 const activeTab = ref("detail");
 const allureSrc = ref("");       // 懒加载：切到 Allure Tab 才设 src（首次现场生成可能 30s+）
@@ -129,7 +146,9 @@ function rerunBatch() {
 }
 
 async function load() {
-  if (!runId.value) return;
+  if (!runId.value) { await loadRunList(); return; }
+  // 切换批次时重置详情态，避免上一批次的数据/对比/Allure 驻留
+  compared.value = false; baselineCases.value = []; allureSrc.value = ""; allureLoading.value = false; activeTab.value = "detail";
   loading.value = true;
   try {
     const resp = await api.getRunCases(runId.value);
@@ -259,10 +278,48 @@ const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 const strVal = (v: unknown) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
 
 onMounted(load);
+// 同一 /report 路由下 query.runId 变化（列表→详情、重跑回跳）不会重新挂载，靠 watch 重载
+watch(runId, () => load());
 </script>
 
 <template>
   <div v-loading="loading">
+    <!-- 批次列表落地页（无 runId，侧栏“报告详情”入口） -->
+    <div v-if="listMode">
+      <div class="page-title">报告详情</div>
+      <div class="page-desc">选择一个批次查看用例明细、失败归类、Allure 报告与上批次对比。</div>
+      <div class="list-actions">
+        <el-button size="small" @click="loadRunList">⟳ 刷新</el-button>
+        <el-button size="small" type="primary" @click="router.push('/execution')">🚀 去执行中心发起新批次</el-button>
+      </div>
+      <el-card shadow="never" style="margin-top: 12px">
+        <el-table :data="runList" size="small" row-key="run_id">
+          <el-table-column label="批次" min-width="240">
+            <template #default="{ row }">
+              <div class="mono">{{ row.run_id }}</div>
+              <div class="case-name">{{ argsText(row.args) }}</div>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="100">
+            <template #default="{ row }"><el-tag :type="runStatusType(row.status)" size="small">{{ row.status }}</el-tag></template>
+          </el-table-column>
+          <el-table-column label="来源" width="90">
+            <template #default="{ row }"><el-tag size="small" :type="row.source === 'api' ? 'primary' : 'info'">{{ row.source }}</el-tag></template>
+          </el-table-column>
+          <el-table-column label="开始时间" width="190">
+            <template #default="{ row }"><span class="mono">{{ row.started_at ?? "—" }}</span></template>
+          </el-table-column>
+          <el-table-column label="操作" width="130" fixed="right">
+            <template #default="{ row }">
+              <el-button size="small" text type="primary" @click="openRun(row.run_id)">查看报告 ›</el-button>
+            </template>
+          </el-table-column>
+          <template #empty><span style="color: #909399">暂无批次，去执行中心跑一次吧。</span></template>
+        </el-table>
+      </el-card>
+    </div>
+
+    <template v-else>
     <!-- 批次概览头 -->
     <div class="batch-head">
       <div class="batch-head-left">
@@ -479,6 +536,7 @@ onMounted(load);
         </el-tabs>
       </div>
     </el-drawer>
+    </template>
   </div>
 </template>
 
@@ -497,6 +555,8 @@ onMounted(load);
 .kpi .value.fail { color: #f56c6c; }
 .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .filter-count { margin-left: auto; color: #909399; font-size: 12px; }
+.page-desc { color: #909399; font-size: 13px; margin: 4px 0 12px; }
+.list-actions { display: flex; gap: 8px; }
 .case-name { color: #909399; font-size: 12px; }
 .summary { font-size: 12px; }
 .txt-fail { color: #f56c6c; }

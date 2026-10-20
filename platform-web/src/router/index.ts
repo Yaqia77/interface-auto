@@ -29,11 +29,18 @@ const router = createRouter({
       meta: { title: "环境配置" },
     },
     {
-      // run_id 可能含 "/"（cli 历史批次 reports/run_xxx），用 query 传参规避动态路由歧义
+      path: "/secrets",
+      name: "secrets",
+      component: () => import("../views/SecretsView.vue"),
+      meta: { title: "凭证管理" },
+    },
+    {
+      // run_id 可能含 "/"（cli 历史批次 reports/run_xxx），用 query 传参规避动态路由歧义；
+      // 无 runId 时报告页落「批次列表」选择页，作为侧栏独立入口。
       path: "/report",
       name: "report",
       component: () => import("../views/ReportView.vue"),
-      meta: { title: "批次报告", active: "/execution" },
+      meta: { title: "报告详情" },
     },
   ],
 });

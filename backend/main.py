@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend import config_writer
-from backend.routers import cases, runs
+from backend.routers import cases, runs, secrets
 from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
@@ -33,6 +33,7 @@ app.add_middleware(
 
 app.include_router(cases.router)
 app.include_router(runs.router)
+app.include_router(secrets.router)
 
 
 @app.get("/api/health", response_model=HealthOut, tags=["系统"], summary="健康检查")

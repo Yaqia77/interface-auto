@@ -29,10 +29,20 @@ onMounted(async () => {
     <el-aside width="220px" class="side">
       <div class="logo">● Interface Auto 平台</div>
       <el-menu router :default-active="activeMenu" class="side-menu">
-        <el-menu-item index="/dashboard">🏠 工作台</el-menu-item>
-        <el-menu-item index="/cases">📋 用例管理</el-menu-item>
-        <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
-        <el-menu-item index="/envs">🌐 环境配置</el-menu-item>
+        <el-menu-item-group label="概览">
+          <el-menu-item index="/dashboard">📊 工作台</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group label="测试管理">
+          <el-menu-item index="/cases">📋 用例管理</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group label="执行与报告">
+          <el-menu-item index="/execution">🚀 执行中心</el-menu-item>
+          <el-menu-item index="/report">📈 报告详情</el-menu-item>
+        </el-menu-item-group>
+        <el-menu-item-group label="配置中心">
+          <el-menu-item index="/envs">🌐 环境配置</el-menu-item>
+          <el-menu-item index="/secrets">🔑 凭证管理</el-menu-item>
+        </el-menu-item-group>
       </el-menu>
       <div class="side-foot">对接 FastAPI 后端 · Excel 为唯一用例载体</div>
     </el-aside>
@@ -70,6 +80,10 @@ body { margin: 0; font-family: "Helvetica Neue", Arial, "PingFang SC", "Microsof
 .side-menu .el-menu-item.is-active { color: #fff; background: #409eff; font-weight: 600; }
 .side-menu .el-menu-item.is-active:hover { background: #409eff; }
 .side-menu .el-menu-item:not(.is-active):hover { color: #fff; }
+/* 分组标题：置灰小字，遵循原型 .menu-group */
+.side-menu :deep(.el-menu-item-group__title) {
+  padding: 12px 16px 6px; font-size: 12px; color: #7c8aa3; line-height: 1;
+}
 .side-foot { padding: 12px 14px; font-size: 11px; color: #63718a; border-top: 1px solid #16202e; }
 .topbar { display: flex; align-items: center; border-bottom: 1px solid #e4e7ed; background: #fff; }
 .main { background: #f5f7fa; }

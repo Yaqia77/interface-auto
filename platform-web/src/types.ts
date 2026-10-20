@@ -121,3 +121,18 @@ export interface RunCaseDetail {
   response: Record<string, unknown> | null;
   assertions: AssertResult[] | null;
 }
+
+/** 凭证变量（/api/secrets）：后端仅回掩码值，绝不透传明文 */
+export interface SecretVar {
+  name: string;
+  masked_value: string;
+  length: number;
+  empty: boolean;
+  kind: string;      // 登录态/凭证 | 密文 | 固定值
+  remark: string;
+}
+
+export interface SecretsResp {
+  exists: boolean;
+  items: SecretVar[];
+}

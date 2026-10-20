@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem } from "../types";
+import type { CaseItem, CasePage, CaseMeta, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp } from "../types";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
 
@@ -96,4 +96,20 @@ export const api = {
   /** 单文件 Allure 中文报告（新标签打开；后端首次访问会现场生成） */
   reportUrl: (runId: string) =>
     `/api/runs/${encodeURIComponent(runId)}/report`,
+
+  /* ---------- 凭证管理（值全程掩码，不回显明文） ---------- */
+  listSecrets: () => http.get<SecretsResp>("/secrets").then((r) => r.data),
+
+  createSecret: (body: { name: string; value: string; remark?: string }) =>
+    http.post<SecretsResp>("/secrets", body).then((r) => r.data),
+
+  updateSecret: (name: string, body: { value?: string; remark?: string }) =>
+    http
+      .put<SecretsResp>(`/secrets/${encodeURIComponent(name)}`, body)
+      .then((r) => r.data),
+
+  deleteSecret: (name: string) =>
+    http
+      .delete<SecretsResp>(`/secrets/${encodeURIComponent(name)}`)
+      .then((r) => r.data),
 };
