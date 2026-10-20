@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
-import { onMounted, reactive, ref } from "vue";
+import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { CaseItem, CaseMeta } from "../types";
@@ -16,6 +16,31 @@ const filters = reactive({
   onlyEnabled: true,
 });
 
+/* ================= 分页 + 模块列合并（后端返回全量筛选结果，前端切片展示） ================= */
+const pageSize = ref(10);
+const currentPage = ref(1);
+
+/** 按模块排序使同模块用例相邻，供模块列纵向合并 */
+const sortedCases = computed(() =>
+  [...cases.value].sort(
+    (a, b) => a.module.localeCompare(b.module, "zh") || a.case_id.localeCompare(b.case_id)
+  )
+);
+const pagedCases = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value;
+  return sortedCases.value.slice(start, start + pageSize.value);
+});
+
+/** 模块列同值纵向合并：仅合并块首行渲染，其余行隐藏（rowspan/colspan 为 0） */
+function spanMethod({ row, column, rowIndex }: { row: CaseItem; column: any; rowIndex: number }) {
+  if (column.property !== "module") return { rowspan: 1, colspan: 1 };
+  const data = pagedCases.value;
+  if (rowIndex > 0 && data[rowIndex - 1].module === row.module) return { rowspan: 0, colspan: 0 };
+  let count = 1;
+  while (rowIndex + count < data.length && data[rowIndex + count].module === row.module) count++;
+  return { rowspan: count, colspan: 1 };
+}
+
 async function search() {
   loading.value = true;
   try {
@@ -27,6 +52,7 @@ async function search() {
     });
     cases.value = resp.items;
     total.value = resp.total;
+    currentPage.value = 1;
   } finally {
     loading.value = false;
   }
@@ -372,7 +398,7 @@ onMounted(async () => {
     </el-card>
 
     <el-card shadow="never">
-      <el-table :data="cases" v-loading="loading" row-key="case_id" size="small">
+      <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" :span-method="spanMethod">
         <el-table-column type="expand">
           <template #default="{ row }">
             <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
@@ -402,7 +428,7 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column prop="api_name" label="接口名称" min-width="140" />
         <el-table-column prop="case_desc" label="用例描述" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="module" label="模块" width="110" />
+        <el-table-column prop="module" label="模块" width="120" />
         <el-table-column label="优先级" width="80">
           <template #default="{ row }"><el-tag :type="prioType(row.priority)" size="small">{{ row.priority }}</el-tag></template>
         </el-table-column>
@@ -430,6 +456,17 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :page-sizes="[10, 20, 50, 100]"
+        :total="total"
+        layout="total, sizes, prev, pager, next, jumper"
+        background
+        size="small"
+        style="margin-top: 12px; justify-content: flex-end"
+        @size-change="currentPage = 1"
+      />
       <div style="margin-top: 10px; color: #909399; font-size: 13px">
         共 {{ total }} 条 ｜ 数据源：data/api_cases.xlsx（Excel 仍是唯一用例载体，平台编辑直写回 Excel，校验不过不落盘）
       </div>
