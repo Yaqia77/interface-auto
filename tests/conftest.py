@@ -104,7 +104,7 @@ def excel_data(request):
 
 
 @pytest.fixture(scope="session")
-def context(app_config, excel_data):
+def context(request, app_config, excel_data):
     """Session 级共享变量池。
 
     优先级：运行时提取值 > 凭证文件 secret_vars > 用例 Excel 全局变量 > YAML 配置。
