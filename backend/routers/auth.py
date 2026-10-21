@@ -31,12 +31,22 @@ def _public(user: dict, with_perms: bool = False) -> UserOut:
 
 
 @router.post("/login", response_model=LoginResponse, summary="登录（用户名+密码）")
-def login(body: LoginRequest):
-    user = user_store.get_user(body.username.strip())
+def login(body: LoginRequest, request: Request):
+    username = body.username.strip()
+    # 限流键：用户名 + 来源 IP（既防单账号被爆珠，也防同一 IP 横扫多账号）
+    ip = request.client.host if request.client else ""
+    key = f"{username}|{ip}"
+    wait = authz.login_retry_after(key)
+    if wait > 0:
+        raise HTTPException(status_code=429, detail=f"登录失败次数过多，请 {wait} 秒后重试")
+    user = user_store.get_user(username)
     if user is None or not user_store.verify_password(body.password, user["password"]):
+        authz.register_login_fail(key)
         raise HTTPException(status_code=401, detail="用户名或密码错误")
     if not user.get("enabled", True):
+        # 停用不是凭据错误，不计入失败限流（否则管理员误停会连带锁住登录尝试统计）
         raise HTTPException(status_code=403, detail="账号已停用，请联系管理员")
+    authz.clear_login_fail(key)
     token = authz.issue_token(user["username"])
     return LoginResponse(
         token=token,
