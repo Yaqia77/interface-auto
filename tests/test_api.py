@@ -23,16 +23,18 @@ def test_api(api_case, executor, context, dep_map, case_results):
         allure.dynamic.description(api_case.case_desc)
 
     if not api_case.run:
+        # 登记停用状态：下游依赖用例据此阻塞，而不是带着未替换的变量照常发请求
+        case_results[api_case.case_id] = "skipped"
         pytest.skip("是否执行=N，跳过")
 
-    # 依赖链检查：前置用例必须全部通过
+    # 依赖链检查（阻塞式）：已执行的依赖用例必须全部通过，否则不发请求直接跳过；
+    # 依赖未在本次执行范围（None）不强制检查，维持 --cases 精确选择的既有契约。
     deps = dep_map.get(api_case.case_id, [])
     if deps:
         failed_deps = [d for d in deps if case_results.get(d) not in ("passed", None)]
-        # None = 该依赖未在本次执行范围内，不强制检查
         if failed_deps:
             case_results[api_case.case_id] = "skipped"
-            pytest.skip(f"依赖用例未通过: {', '.join(failed_deps)}")
+            pytest.skip(f"因依赖用例未通过而阻塞（未发起请求）: {', '.join(failed_deps)}")
 
     runner = CaseRunner(executor, context)
     start = time.perf_counter()

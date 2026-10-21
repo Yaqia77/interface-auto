@@ -16,6 +16,12 @@ env:
     verify_ssl: false   # 公司网络 TLS 拦截/测试环境自签证书时关闭校验
     default_headers:
       User-Agent: interface-auto/1.0
+  algo:
+    base_url: https://test.yun.139.com/ai/ai-test
+    timeout: 30
+    verify_ssl: false
+    default_headers:
+      User-Agent: interface-auto/1.0
 
 # 报告开关
 report:

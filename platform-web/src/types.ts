@@ -26,6 +26,49 @@ export interface CasePage {
   items: CaseItem[];
 }
 
+/** 智能导入：转换后的用例草稿（与 CaseCreate 请求体同构，字段可能缺省走默认值） */
+export interface ImportCaseDraft {
+  case_id: string;
+  module: string;
+  api_name: string;
+  case_desc: string;
+  priority: string;
+  run: boolean;
+  method: string;
+  url: string;
+  headers?: Record<string, unknown> | null;
+  params?: Record<string, unknown> | null;
+  body?: unknown;
+  extract?: Record<string, string> | null;
+  asserts?: unknown[][] | null;
+  timeout?: number | null;
+  pre_scripts?: string[];
+  post_scripts?: string[];
+}
+
+/** 智能导入：单行转换标注（warn=需确认，error=不可导入） */
+export interface ImportMark {
+  level: "info" | "warn" | "error";
+  field: string;
+  msg: string;
+}
+
+export interface ImportPreviewItem {
+  row: number;
+  case: ImportCaseDraft;
+  marks: ImportMark[];
+  importable: boolean;
+  exists: boolean;
+}
+
+export interface ImportPreviewResp {
+  sheet: string;
+  format: "standard" | "mapped";
+  column_map: { header: string; field: string }[];
+  unmapped_headers: string[];
+  items: ImportPreviewItem[];
+}
+
 export interface RunItem {
   run_id: string;
   status: "pending" | "running" | "passed" | "failed" | "error" | "unknown";

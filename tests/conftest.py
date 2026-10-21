@@ -51,8 +51,76 @@ def _load_cases(file_arg: str):
     return _LOAD_CACHE[key]
 
 
+def _load_dep_map() -> dict:
+    """读用例依赖映射（data/dependencies.json，平台「配置依赖」写入）；缺失/损坏返回空。"""
+    dep_file = ROOT / "data" / "dependencies.json"
+    if not dep_file.exists():
+        return {}
+    try:
+        data = json.loads(dep_file.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _expand_deps(selected: list, all_cases: list, dep_map: dict) -> list:
+    """条件执行时自动纳入被依赖的用例（传递闭包，仅限 run=True）。
+
+    解决痛点：按模块/优先级筛选时，提取 token 的登录用例没被选中，
+    下游用例报「变量未定义」。依赖被停用（run=N）时不纳入，
+    尊重用户的显式停用意图（也符合停用用例不进报告的既有约定）。
+    """
+    by_id = {c.case_id: c for c in all_cases}
+    picked = {c.case_id for c in selected}
+    out = list(selected)
+    stack = [c.case_id for c in selected]
+    while stack:
+        cid = stack.pop()
+        for d in dep_map.get(cid) or []:
+            if d in picked:
+                continue
+            dep_case = by_id.get(d)
+            if dep_case is not None and dep_case.run:
+                picked.add(d)
+                out.append(dep_case)
+                stack.append(d)
+    return out
+
+
+def _topo_order(selected: list, dep_map: dict) -> list:
+    """稳定拓扑排序：依赖用例排到前面，无依赖关系时保持 Excel 行序。
+
+    手工编辑的 dependencies.json 可能成环：沿链带 chain 集合，命中即断开，
+    不崩不丢（成环时顺序按行序，运行时由阻塞检查兜底）。
+    """
+    picked = {c.case_id for c in selected}
+    by_id = {c.case_id: c for c in selected}
+    ordered: list = []
+    done: set = set()
+
+    def emit(cid: str, chain: set) -> None:
+        if cid in done or cid in chain:
+            return
+        chain.add(cid)
+        for d in dep_map.get(cid) or []:
+            if d in picked:
+                emit(d, chain)
+        chain.discard(cid)
+        if cid not in done:
+            done.add(cid)
+            ordered.append(by_id[cid])
+
+    for c in selected:
+        emit(c.case_id, set())
+    return ordered
+
+
 def pytest_generate_tests(metafunc):
-    """按 Excel 行顺序生成参数化用例（严格保持顺序，保证接口依赖可用）。"""
+    """按 Excel 行顺序生成参数化用例（严格保持顺序，保证接口依赖可用）。
+
+    声明了依赖（dependencies.json）时：条件执行自动纳入未选中的启用依赖用例，
+    并把全部选中用例拓扑排序到依赖先行的顺序（--cases 精确选择不补全，仅排序）。
+    """
     if "api_case" not in metafunc.fixturenames:
         return
     data = _load_cases(metafunc.config.getoption("--file"))
@@ -71,6 +139,11 @@ def pytest_generate_tests(metafunc):
             if case.case_id in id_set:
                 selected.append(case)
             continue
+        # 按条件/全量执行时排除「是否执行=N」的用例：它们不该被收集，
+        # 否则会在 test_api 里被 pytest.skip，进而在报告中留下「已跳过」条目污染结果。
+        # （--cases 精确选择是显式意图，走上面的分支不受此限。）
+        if not case.run:
+            continue
         if module and module not in case.module:
             continue
         if pri_set and case.priority.upper() not in pri_set:
@@ -84,6 +157,13 @@ def pytest_generate_tests(metafunc):
     if not selected:
         hint = "--cases" if id_set is not None else "--file/--module/--priority/--keyword"
         raise pytest.UsageError(f"没有匹配到任何用例，请检查 {hint} 筛选条件")
+
+    dep_map = _load_dep_map()
+    if dep_map:
+        if id_set is None:
+            # 条件/全量执行：补全启用状态的依赖用例（--cases 精确选择保持现状不补全）
+            selected = _expand_deps(selected, data.cases, dep_map)
+        selected = _topo_order(selected, dep_map)
     metafunc.parametrize("api_case", selected, ids=[c.case_id for c in selected])
 
 

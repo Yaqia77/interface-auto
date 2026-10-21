@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -22,6 +22,11 @@ http.interceptors.response.use(
       if (window.location.pathname !== "/login") {
         ElMessage.warning("登录已过期，请重新登录");
         window.location.assign("/login");
+      } else {
+        // 登录页自身的 401（用户名或密码错误）：拦截器原先静默放行，页面上毫无提示，
+        // 这里补展示后端 detail，登录页再叠加卡内红色告警，双重可见
+        const d = error.response?.data?.detail;
+        if (d) ElMessage.error(typeof d === "string" ? d : JSON.stringify(d));
       }
       return Promise.reject(error);
     }
@@ -254,6 +259,27 @@ export const api = {
         { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
       .then((r) => r.data);
   },
+
+  /** 下载空白用例模板（含下拉校验与填写说明） */
+  downloadTemplate: () =>
+    http.get("/cases/template", { responseType: "blob" }).then((r) => r.data as Blob),
+
+  /** 智能导入预览：上传任意表头 xlsx，返回转换后的用例草稿与标注（不落盘） */
+  smartImportPreview: (file: File) => {
+    const fd = new FormData();
+    fd.append("uploaded_file", file);
+    return http
+      .post<ImportPreviewResp>("/cases/import/preview", fd,
+        { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
+      .then((r) => r.data);
+  },
+
+  /** 智能导入落盘：把预览确认后的用例批量写入 */
+  smartImportConfirm: (cases: ImportCaseDraft[]) =>
+    http
+      .post<{ imported: number; skipped: number; errors: string[] }>("/cases/import/confirm", { cases },
+        { timeout: 60000 })
+      .then((r) => r.data),
 
   /* ---------- 公共脚本（设计文档 2.4：前后置声明式步骤链） ---------- */
   listScripts: () => http.get<ScriptItem[]>("/scripts").then((r) => r.data),

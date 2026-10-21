@@ -96,6 +96,10 @@ const origUsed = ref<string[]>([]);
 const form = reactive({ name: "", remark: "" });
 const steps = ref<StepDraft[]>([]);
 
+/* 「粘贴 JSON 导入」：把整段步骤定义一次贴入，解析回填成步骤后仍走同套校验保存 */
+const importVisible = ref(false);
+const importText = ref("");
+
 const errMsg = (m: string) => { ElMessage.error(m); return null; };
 
 const objToRows = (o: Record<string, unknown> | undefined | null): KvRow[] =>
@@ -253,6 +257,270 @@ function copyAsNew(row: ScriptItem) {
   form.remark = row.remark;
 }
 
+/** 粘贴新建：清空占位步，直接弹导入框（作为列表页的另一种「新增方式」） */
+function createByImport() {
+  openCreate();
+  steps.value = [];
+  importText.value = "";
+  importVisible.value = true;
+}
+
+/** 从现有步骤链生成 JSON 并填入导入框（便于复制/改写/版本化） */
+function exportToJson() {
+  const arr: ScriptStep[] = [];
+  for (const [i, d] of steps.value.entries()) {
+    const s = toServer(d, i);
+    if (s === null) return; // toServer 已提示错误
+    arr.push(s);
+  }
+  importText.value = JSON.stringify(arr, null, 2);
+  importVisible.value = true;
+}
+
+const IMPORT_SAMPLE = `[
+  {
+    "action": "request",
+    "desc": "三方鉴权取 neauth",
+    "method": "POST",
+    "url": "https://.../neauth/query",
+    "headers": { "Content-Type": "application/json" },
+    "body": { "fromAppKey": "...", "toAppKey": "..." },
+    "extract": { "x_yun_app_key": "$.data.x-yun-app-key", "x_yun_neauth": "$.data.x-yun-neauth" }
+  }
+]`;
+
+/** 从索引处的括号/花括号，返回其配对闭合位置（跳过字符串字面量）；找不到返回 -1 */
+function matchBalanced(text: string, openIdx: number): number {
+  const openCh = text[openIdx];
+  const closeCh = openCh === "{" ? "}" : openCh === "[" ? "]" : openCh === "(" ? ")" : "";
+  if (!closeCh) return -1;
+  let depth = 0;
+  let inStr: string | null = null;
+  for (let i = openIdx; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (c === "\\") { i++; continue; }
+      if (c === inStr) inStr = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { inStr = c; continue; }
+    if (c === openCh) depth++;
+    else if (c === closeCh) { depth--; if (depth === 0) return i; }
+  }
+  return -1;
+}
+
+/** 按顶层分隔符切开（嵌套括号/字符串内的分隔符不切） */
+function splitTopLevel(s: string, sep: string): string[] {
+  const parts: string[] = [];
+  let depth = 0; let inStr: string | null = null; let cur = "";
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (inStr) { cur += c; if (c === "\\") { cur += s[++i]; continue; } if (c === inStr) inStr = null; continue; }
+    if (c === '"' || c === "'" || c === "`") { inStr = c; cur += c; continue; }
+    if (c === "{" || c === "[" || c === "(") { depth++; cur += c; continue; }
+    if (c === "}" || c === "]" || c === ")") { depth--; cur += c; continue; }
+    if (c === sep && depth === 0) { parts.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/** 取 `key: "value"` / `key: 'value'` 的字符串值 */
+function matchStrVal(t: string, keyRe: RegExp): string | undefined {
+  const m = keyRe.exec(t);
+  if (!m) return undefined;
+  const sm = /^\s*(['"])(.*?)\1/.exec(t.slice(m.index + m[0].length));
+  return sm ? sm[2] : undefined;
+}
+
+/** 把一段 `"k": "v"` / `k: 'v'` 文本解成字符串键值对 */
+function parseStrPairs(t: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /['"]?([\w-]+)['"]?\s*:\s*(['"])(.*?)\2/g;
+  let m;
+  while ((m = re.exec(t))) out[m[1]] = m[3];
+  return out;
+}
+
+/** 宽松地将 JS 对象字面量修正为 JSON（补引号键 / 单引号转双 / 去尾逗号） */
+function jsObjToJson(text: string): string {
+  let out = text.replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":');
+  out = out.replace(/,\s*([}\]])/g, "$1");
+  out = out.replace(/'([^']*)'/g, '"$1"');
+  return out;
+}
+
+function tryParseJsObj(text: string): unknown {
+  try { return JSON.parse(text); } catch { /* 继续宽松解析 */ }
+  try { return JSON.parse(jsObjToJson(text)); } catch { return undefined; }
+}
+
+/** 把 pm 取值表达式转 JSONPath：bb['data']['x-yun-key'] → $.data['x-yun-key']；res.json().data.id → $.data.id */
+function pmExprToJsonPath(expr: string): string {
+  let tail = expr;
+  const j = expr.search(/\.json\s*\(/);
+  if (j >= 0) tail = expr.slice(j);
+  else tail = expr.replace(/^[A-Za-z_$][\w$]*/, "");
+  const segs: string[] = [];
+  const re = /\[\s*(['"])(.*?)\1\s*\]|\.([A-Za-z_$][\w$]*)/g;
+  let m;
+  while ((m = re.exec(tail))) {
+    const seg = m[2] != null ? m[2] : m[3];
+    if (seg === "json") continue;
+    segs.push(seg);
+  }
+  if (!segs.length) return "$";
+  return "$" + segs.map((s) => (/^\w+$/.test(s) ? "." + s : "['" + s + "']")).join("");
+}
+
+/** 从回调体里抽 pm.environment/variables.set("name", expr) → 提取映射（变量名非法字符转下划线） */
+function parseApifoxExtracts(cb: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const re = /pm\.(?:environment|variables)\.set\s*\(/g;
+  let m;
+  while ((m = re.exec(cb))) {
+    const op = m.index + m[0].length - 1;
+    const cl = matchBalanced(cb, op);
+    if (cl < 0) continue;
+    const args = splitTopLevel(cb.slice(op + 1, cl), ",");
+    if (args.length < 2) continue;
+    const nameM = /^\s*(['"])(.*?)\1\s*$/.exec(args[0]);
+    if (!nameM) continue;
+    const key = nameM[2].replace(/\W/g, "_").replace(/^(\d)/, "_$1");
+    const jp = pmExprToJsonPath(args[1].trim());
+    if (key && jp) out[key] = jp;
+  }
+  return out;
+}
+
+/** 解析单个请求对象字面量 → method/url/headers/body */
+function parseApifoxRequest(t: string): ScriptStep | null {
+  const url = matchStrVal(t, /\burl\s*:/);
+  if (!url) return null;
+  const method = (matchStrVal(t, /\bmethod\s*:/) || "GET").toUpperCase();
+  const step: ScriptStep = { action: "request", desc: "从 Apifox/Postman 脚本导入", method, url };
+  const hm = /\bheaders?\s*:\s*\{/.exec(t);
+  if (hm) {
+    const ob = t.indexOf("{", hm.index + hm[0].length - 1);
+    const cb = matchBalanced(t, ob);
+    if (cb >= 0) {
+      const h = parseStrPairs(t.slice(ob + 1, cb));
+      if (Object.keys(h).length) step.headers = h;
+    }
+  }
+  const bm = /\bbody\s*:\s*\{/.exec(t);
+  if (bm) {
+    const ob = t.indexOf("{", bm.index + bm[0].length - 1);
+    const cb = matchBalanced(t, ob);
+    if (cb >= 0) {
+      const bodyText = t.slice(ob, cb + 1);
+      const jm = /raw\s*:\s*JSON\.stringify\s*\(/.exec(bodyText);
+      if (jm) {
+        const op = bodyText.indexOf("(", jm.index + jm[0].length - 1);
+        const cl = matchBalanced(bodyText, op);
+        if (cl >= 0) { const v = tryParseJsObj(bodyText.slice(op + 1, cl)); if (v !== undefined) step.body = v; }
+      } else {
+        const raw = matchStrVal(bodyText, /\braw\s*:/);
+        if (raw) { const v = tryParseJsObj(raw); step.body = v !== undefined ? v : raw; }
+      }
+    }
+  }
+  return step;
+}
+
+/** 将整段 Apifox/Postman 脚本转为步骤链（每个 pm.sendRequest 一步）；识别不了返回 null */
+function convertApifoxScript(src: string): ScriptStep[] | null {
+  const re = /pm\.sendRequest\s*\(/g;
+  const steps: ScriptStep[] = [];
+  let m;
+  while ((m = re.exec(src))) {
+    const op = m.index + m[0].length - 1;
+    const cl = matchBalanced(src, op);
+    if (cl < 0) continue;
+    const args = splitTopLevel(src.slice(op + 1, cl), ",");
+    const reqRef = (args[0] || "").trim();
+    const cbText = args[1] || "";
+    let reqText = "";
+    if (reqRef.startsWith("{")) reqText = reqRef;
+    else {
+      const idm = reqRef.match(/[A-Za-z_$][\w$]*/);
+      if (idm) {
+        const dm = new RegExp("(?:const|let|var)?\\s*" + idm[0] + "\\s*=\\s*\\{").exec(src);
+        if (dm) {
+          const ob = src.indexOf("{", dm.index + dm[0].length - 1);
+          const cb = matchBalanced(src, ob);
+          if (cb >= 0) reqText = src.slice(ob, cb + 1);
+        }
+      }
+    }
+    if (!reqText) continue;
+    const step = parseApifoxRequest(reqText);
+    if (!step) continue;
+    const extract = parseApifoxExtracts(cbText);
+    if (Object.keys(extract).length) step.extract = extract;
+    steps.push(step);
+  }
+  return steps.length ? steps : null;
+}
+
+/** 统一的回填入口：结构校验 + 转草稿 + 应用名称/说明 */
+function fillSteps(arr: ScriptStep[], name = "", remark = "") {
+  if (!arr.length) { ElMessage.error("解析结果为空步骤"); return; }
+  if (arr.length > stepLimit()) { ElMessage.error(`步骤数超上限 ${stepLimit()}（拆分成多条脚本）`); return; }
+  const validActions = actionOptions.value.map((a) => a.action);
+  for (const [i, s] of arr.entries()) {
+    if (!s || typeof s !== "object") { ElMessage.error(`第 ${i + 1} 步不是 JSON 对象`); return; }
+    if (!validActions.includes(s.action)) {
+      ElMessage.error(`第 ${i + 1} 步动作「${s.action ?? "(空)"}」不支持，可用：${validActions.join(" / ")}`);
+      return;
+    }
+  }
+  steps.value = arr.map(toDraft);
+  if (name.trim() && !isEdit.value && !renameLocked.value) form.name = name.trim();
+  if (remark.trim()) form.remark = remark.trim();
+  importVisible.value = false;
+  ElMessage.success(`已填入 ${arr.length} 步，请核对后点「保存脚本」`);
+}
+
+/** 解析粘贴内容并回填。优先当 JSON（数组/脚本对象/单步）；失败则尝试当 Apifox/Postman JS 脚本转换 */
+function applyImport() {
+  const raw = importText.value.trim();
+  if (!raw) { ElMessage.error("请先粘贴脚本内容"); return; }
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    const jsSteps = convertApifoxScript(raw);
+    if (jsSteps) { fillSteps(jsSteps); return; }
+    ElMessage.error("既不是合法 JSON，也无法识别为 Apifox/Postman 脚本（需含 pm.sendRequest）");
+    return;
+  }
+  const obj = data as Record<string, unknown>;
+  let stepsArr: unknown;
+  let metaName = "";
+  let metaRemark = "";
+  if (Array.isArray(data)) {
+    stepsArr = data;
+  } else if (data && typeof data === "object") {
+    if (Array.isArray(obj.steps)) {
+      stepsArr = obj.steps;
+      metaName = typeof obj.name === "string" ? obj.name : "";
+      metaRemark = typeof obj.remark === "string" ? obj.remark : "";
+    } else if (typeof obj.action === "string") {
+      stepsArr = [obj];
+    } else {
+      ElMessage.error("JSON 需为步骤数组，或含 steps 字段的脚本对象");
+      return;
+    }
+  } else {
+    ElMessage.error("JSON 需为步骤数组或脚本对象");
+    return;
+  }
+  fillSteps(stepsArr as ScriptStep[], metaName, metaRemark);
+}
+
 const renameLocked = computed(() => isEdit.value && origUsed.value.length > 0);
 
 function addStep() {
@@ -332,6 +600,7 @@ async function remove(row: ScriptItem) {
       </div>
       <div class="header-ops">
         <el-button size="small" @click="loadList">刷新</el-button>
+        <el-button v-perm="'script:manage'" size="small" @click="createByImport">✂ 粘贴新建</el-button>
         <el-button v-perm="'script:manage'" type="primary" size="small" @click="openCreate()">＋ 新建脚本</el-button>
       </div>
     </div>
@@ -419,6 +688,12 @@ async function remove(row: ScriptItem) {
         <el-divider content-position="left">
           步骤链（{{ steps.length }} / {{ stepLimit() }} 步 · 按序执行）
         </el-divider>
+
+        <div class="step-tools">
+          <el-button size="small" text type="primary" @click="importText = ''; importVisible = true">✂ 粘贴 JSON 导入</el-button>
+          <el-button size="small" text :disabled="!steps.length" @click="exportToJson">⬇ 导出为 JSON</el-button>
+          <span class="dim">不想逐步填？把整段步骤定义贴进来，自动解析成下面的步骤。</span>
+        </div>
 
         <div v-for="(s, i) in steps" :key="i" class="step-card">
           <div class="step-head">
@@ -526,6 +801,23 @@ async function remove(row: ScriptItem) {
         <el-button @click="drawerVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" @click="save">保存脚本</el-button>
       </el-form>
+
+      <!-- 粘贴 JSON 导入对话框 -->
+      <el-dialog v-model="importVisible" append-to-body width="640px"
+                 :title="isEdit ? '粘贴 JSON 覆盖当前步骤' : '粘贴 JSON 导入'">
+        <div class="hint" style="margin-bottom: 8px">
+          支持两类粘体：① <span class="mono">JSON</span>（步骤数组 / <span class="mono">{ name, remark, steps:[...] }</span> / 单步对象）；
+          ② <span class="mono">Apifox/Postman 脚本</span>（自动识别 <span class="mono">pm.sendRequest</span> 与 <span class="mono">pm.environment.set</span>，连字符变量名自动转下划线）。
+          解析后回填成步骤供你核对，仍需点「保存脚本」才落盘；动作与字段合法性由后端同一套校验兜底。
+        </div>
+        <el-input v-model="importText" type="textarea" :rows="14" class="mono" spellcheck="false"
+                  :placeholder="IMPORT_SAMPLE" />
+        <template #footer>
+          <el-button @click="importVisible = false">取消</el-button>
+          <el-button @click="importText = IMPORT_SAMPLE">填入示例</el-button>
+          <el-button type="primary" @click="applyImport">解析并填入</el-button>
+        </template>
+      </el-dialog>
     </el-drawer>
   </div>
 </template>
@@ -546,6 +838,7 @@ async function remove(row: ScriptItem) {
 .opt-val { float: right; color: #a0a4a8; font-size: 12px; margin-left: 16px; }
 /* 步骤卡片 */
 .step-card { border: 1px solid #e4e7ed; border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: #fafbfc; }
+.step-tools { display: flex; align-items: center; gap: 10px; margin: -4px 0 12px; }
 .step-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .step-lead { color: #a8abb2; font-size: 12px; margin-bottom: 8px; }
 .kv-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }

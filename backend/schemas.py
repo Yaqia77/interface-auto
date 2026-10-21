@@ -73,6 +73,12 @@ class CaseCreate(BaseModel):
     post_scripts: list[str] | None = Field(default=None, description="后置公共脚本名列表")
 
 
+class CaseBatchCreate(BaseModel):
+    """智能导入确认落盘：批量用例（前端预览确认后原样回传）。"""
+
+    cases: list[CaseCreate] = Field(description="预览确认后的用例列表")
+
+
 class RunCreate(BaseModel):
     """发起一次执行批次。"""
 

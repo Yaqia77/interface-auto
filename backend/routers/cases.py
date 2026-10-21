@@ -10,10 +10,12 @@ from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
 from backend import authz, excel_writer
+from backend import case_importer, case_template
 from backend.excel_writer import CaseWriteError
-from backend.schemas import CaseCreate, CaseOut, CasePage, CaseUpdate
+from backend.schemas import CaseBatchCreate, CaseCreate, CaseOut, CasePage, CaseUpdate
 from core import excel_loader, scripts as core_scripts
 from core.excel_loader import CASE_COLUMNS, ExcelFormatError
+from core.models import TestCase
 
 ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上溯两级）
 
@@ -142,6 +144,17 @@ def list_variables(file: str = Query(default="data/api_cases.xlsx")):
         "excel_variables": sorted(result.variables),
         "secret_variables": sorted(excel_loader.load_secret_vars(ROOT / "data" / "secret_vars.xlsx")),
     }
+
+
+@router.get("/template", summary="下载空白用例模板（含下拉校验与填写说明）")
+def download_template():
+    """固定表头 + 优先级/是否执行/请求方式下拉 + 一行示例 + 填写说明，下载即填。"""
+    buf = case_template.build_template_bytes()
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="cases_template.xlsx"'},
+    )
 
 
 @router.get("/export", summary="导出用例 xlsx（按筛选条件）")
@@ -285,6 +298,59 @@ async def import_cases(
         return summary
     finally:
         tmp.unlink(missing_ok=True)
+
+
+@router.post("/import/preview", summary="智能导入预览：解析任意表头的 xlsx 并转换为标准用例（不落盘）")
+async def import_preview(
+    uploaded_file: UploadFile = File(..., description="任意格式用例 xlsx（人工评审表/其他平台导出）"),
+    file: str = Query(default="data/api_cases.xlsx", description="对比用的目标用例文件（判重）"),
+    _: dict = Depends(authz.require_perm("case:write")),
+):
+    if not (uploaded_file.filename or "").endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="仅支持 .xlsx 文件")
+    path = _resolve_file(file)
+    existing: set[str] = set()
+    try:
+        existing = {c.case_id.lower() for c in _load_cached(path).cases}
+    except ExcelFormatError:
+        pass  # 目标文件本身有问题不阻断预览，只失去判重能力
+    tmp = path.with_name(f"~$import_preview_tmp.xlsx")
+    try:
+        tmp.write_bytes(await uploaded_file.read())
+        try:
+            return case_importer.parse_workbook(tmp, existing)
+        except (ValueError, ExcelFormatError) as e:
+            raise HTTPException(status_code=400, detail=f"无法解析上传文件: {e}")
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"文件解析失败: {e!r}")
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+@router.post("/import/confirm", summary="智能导入落盘：把预览确认后的用例批量追加（编号已存在跳过）")
+def import_confirm(
+    body: CaseBatchCreate,
+    file: str = Query(default="data/api_cases.xlsx", description="目标用例文件"),
+    _: dict = Depends(authz.require_perm("case:write")),
+):
+    path = _resolve_file(file)
+    if path.is_dir():
+        raise HTTPException(status_code=400, detail="目录模式下无法确定导入目标文件，请指定具体 xlsx")
+    if not body.cases:
+        raise HTTPException(status_code=400, detail="没有待导入的用例")
+    # 脚本引用在此做最后一道闸：预览后脚本可能被删，缺引用的单条跳过不阻断整批
+    library = core_scripts.load_scripts()
+    tcs, errors = [], []
+    for item in body.cases:
+        refs = [str(n).strip() for n in list(item.pre_scripts or []) + list(item.post_scripts or []) if str(n).strip()]
+        missing = sorted({n for n in refs if n not in library})
+        if missing:
+            errors.append(f"{item.case_id}: 公共脚本不存在 {', '.join(missing)}，已跳过")
+            continue
+        tcs.append(TestCase(row=0, source="smart-import", **item.model_dump()))
+    summary = excel_writer.bulk_append(path, tcs) if tcs else {"imported": 0, "skipped": 0, "errors": []}
+    summary["errors"] = summary.get("errors", []) + errors
+    return summary
 
 
 @router.delete("/{case_id}", summary="删除用例（Excel 整行删除，校验通过才落盘）")

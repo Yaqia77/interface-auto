@@ -1,10 +1,10 @@
 <script setup lang="ts">
 /** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ScriptItem } from "../types";
+import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, ScriptItem } from "../types";
 
 const router = useRouter();
 const route = useRoute();
@@ -49,6 +49,7 @@ const pagedCases = computed(() => {
 function selectModule(name: string) {
   activeModule.value = name;
   currentPage.value = 1;
+  clearSelection();
 }
 
 async function search() {
@@ -64,7 +65,7 @@ async function search() {
     // 当前选中模块若已不在结果中（被筛掉/改名）则回退到全部
     if (activeModule.value && !resp.items.some((c) => c.module === activeModule.value)) activeModule.value = "";
     currentPage.value = 1;
-    selected.value = [];
+    clearSelection();
   } finally {
     loading.value = false;
   }
@@ -210,7 +211,56 @@ const asrtRows = ref<AssertRow[]>([]);
 
 // 字面量含 {{ }}，定义为常量避免写进模板插值
 const VAR_PH = "值，支持 {{变量}} 引用";
-const PATH_PH = "status_code / response_text / $.data.code";
+const PATH_PH = "选常用字段或输入 JSONPath，如 $.data.id";
+
+/* ---------- 断言编辑器中文化（设计：平台 UI 汉化 + 中文预览，Excel 格式不变） ---------- */
+const OP_LABELS: Record<string, string> = {
+  eq: "等于", neq: "不等于", contains: "包含",
+  gt: "大于", ge: "大于等于", lt: "小于", le: "小于等于",
+  regex: "正则匹配", not_null: "不为空", len_eq: "长度等于",
+};
+const opLabel = (op: string) => OP_LABELS[op] || op;
+
+const PATH_PRESETS = [
+  { value: "status_code", label: "HTTP 状态码" },
+  { value: "$.code", label: "业务响应码" },
+  { value: "$.success", label: "成功标志" },
+  { value: "$.message", label: "响应消息" },
+  { value: "$.data", label: "响应数据（整体）" },
+  { value: "$.data.totalCount", label: "数据总数" },
+  { value: "response_text", label: "响应原文" },
+  { value: "var.", label: "变量池（var.变量名）" },
+];
+
+/** 每条断言的中文语义预览 */
+function assertHint(row: AssertRow): string {
+  const pathCn = PATH_PRESETS.find(p => p.value === row.path)?.label
+    || (row.path.startsWith("$.") ? `响应字段 ${row.path}` : row.path || "（待选）");
+  const opCn = opLabel(row.op);
+  if (row.op === "not_null") return `${pathCn} 不为空`;
+  if (!opNeedExpected(row.op)) return `${pathCn} ${opCn}`;
+  return `${pathCn} ${opCn} ${row.expected || "（待填）"}`;
+}
+
+/** 快捷断言模板：点击即追加常用组合 */
+const ASSERT_PRESETS: { label: string; rows: AssertRow[] }[] = [
+  { label: "接口调用成功", rows: [
+    { op: "eq", path: "status_code", expected: "200" },
+    { op: "eq", path: "$.code", expected: "0000" },
+  ]},
+  { label: "返回数据非空", rows: [
+    { op: "eq", path: "status_code", expected: "200" },
+    { op: "not_null", path: "$.data", expected: "" },
+  ]},
+  { label: "请求应报错", rows: [
+    { op: "eq", path: "status_code", expected: "200" },
+    { op: "neq", path: "$.code", expected: "0000" },
+  ]},
+];
+
+function applyAssertPreset(preset: typeof ASSERT_PRESETS[0]) {
+  asrtRows.value.push(...preset.rows.map(r => ({ ...r })));
+}
 const varChip = (v: string) => "{{" + v + "}}";
 
 const prioOptions = () => meta.value?.priorities ?? ["P0", "P1", "P2", "P3", "P4", "P5"];
@@ -224,8 +274,19 @@ function queryModules(qs: string, cb: (r: { value: string }[]) => void) {
 }
 
 /* ================= 批量启停 ================= */
+const tableRef = ref();          // 表格实例：需要命令式清空勾选（reserve-selection 下仅改 selected 不会同步复选框）
 const selected = ref<CaseItem[]>([]);
 const batching = ref(false);
+
+/** 清空选择：先调 el-table 的 clearSelection 释放保留勾选，再兜底重置本地计数 */
+function clearSelection() {
+  tableRef.value?.clearSelection?.();
+  selected.value = [];
+}
+
+// fixed="right" 操作列 + expand 展开列：数据/翻页/页大小变化后固定列点击热区会错位（按钮看着在、点下去无反应），
+// 需 nextTick 后调 doLayout() 让表格重算列布局。watch pagedCases 一并覆盖翻页与筛选两种触发路径。
+watch(pagedCases, () => nextTick(() => tableRef.value?.doLayout?.()));
 
 /* ================= 导入导出 ================= */
 const importInput = ref<HTMLInputElement>();
@@ -271,6 +332,97 @@ async function onFileSelected(e: Event) {
 
 function onSelectionChange(rows: CaseItem[]) {
   selected.value = rows;
+}
+
+/* ---------- 模板下载 ---------- */
+async function doDownloadTemplate() {
+  try {
+    const blob = await api.downloadTemplate();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "cases_template.xlsx";
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success("模板已下载，填写后可直接「导入」或「智能导入」");
+  } catch { /* 拦截器已提示 */ }
+}
+
+/* ---------- 智能导入（预览确认流：上传 → 转换报告 → 勾选确认 → 落盘） ---------- */
+const smartInput = ref<HTMLInputElement>();
+const smartVisible = ref(false);
+const smartLoading = ref(false);
+const smartSaving = ref(false);
+const smartData = ref<ImportPreviewResp | null>(null);
+const smartTableRef = ref();
+const smartSelected = ref<ImportPreviewItem[]>([]);
+
+// 转换报告里的字段中文名（后端 field → 展示）
+const FIELD_LABEL: Record<string, string> = {
+  case_id: "用例编号", module: "模块", module2: "模块(辅助)", api_name: "接口名称", case_desc: "用例描述",
+  priority: "优先级", run: "是否执行", method: "请求方式", url: "请求路径", headers: "请求头",
+  params: "查询参数", body: "请求体", extract: "变量提取", asserts: "断言", timeout: "超时",
+  pre_scripts: "前置脚本", post_scripts: "后置脚本", precondition: "预置条件·参与转换", steps: "操作步骤·参与转换",
+  expected: "预期结果·参与转换",
+};
+
+function triggerSmartImport() {
+  smartInput.value?.click();
+}
+
+async function onSmartFile(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  input.value = "";
+  smartLoading.value = true;
+  smartVisible.value = true;
+  smartData.value = null;
+  smartSelected.value = [];
+  try {
+    const resp = await api.smartImportPreview(file);
+    smartData.value = resp;
+    await nextTick();
+    // 默认勾选：可导入且编号不与存量冲突
+    for (const it of resp.items) {
+      if (it.importable && !it.exists) smartTableRef.value?.toggleRowSelection(it, true);
+    }
+  } catch {
+    smartVisible.value = false;
+  } finally {
+    smartLoading.value = false;
+  }
+}
+
+function smartSelectable(row: ImportPreviewItem) {
+  return row.importable && !row.exists;
+}
+
+function smartRowClass({ row }: { row: ImportPreviewItem }) {
+  if (!row.importable) return "row-err";
+  if (row.exists) return "row-exist";
+  return row.marks.some((m) => m.level === "warn") ? "row-warn" : "";
+}
+
+async function doSmartImport() {
+  if (!smartSelected.value.length) {
+    ElMessage.info("请至少勾选一条用例");
+    return;
+  }
+  smartSaving.value = true;
+  try {
+    const { imported, skipped, errors } = await api.smartImportConfirm(smartSelected.value.map((x) => x.case));
+    if (errors.length) {
+      ElMessage.warning(`导入 ${imported} 条，跳过 ${skipped} 条已有，${errors.length} 条异常（${errors[0]}）`);
+    } else {
+      ElMessage.success(`导入 ${imported} 条，跳过 ${skipped} 条已有`);
+    }
+    smartVisible.value = false;
+    await search();
+    meta.value = await api.getCaseMeta();
+  } catch { /* 拦截器已提示 */ } finally {
+    smartSaving.value = false;
+  }
 }
 
 /** 批量启用/停用：串行逐个写回 Excel（同一文件不能并发写，避开行锁漂移与互相覆盖） */
@@ -658,6 +810,8 @@ onMounted(async () => {
   try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
   loadScripts();
   loadApiDefs();
+  await nextTick();
+  tableRef.value?.doLayout?.();   // 首屏固定列布局重算，避免首次渲染操作列热区错位
 });
 </script>
 
@@ -713,8 +867,11 @@ onMounted(async () => {
             <el-button v-perm="'case:write'" type="success" plain @click="openCreate">＋ 新增用例</el-button>
             <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
             <el-button plain @click="doExport">⬇ 导出</el-button>
+            <el-button plain @click="doDownloadTemplate">📄 模板</el-button>
             <el-button v-perm="'case:write'" plain @click="triggerImport">⬆ 导入</el-button>
+            <el-button v-perm="'case:write'" plain @click="triggerSmartImport">✨ 智能导入</el-button>
             <input ref="importInput" type="file" accept=".xlsx" style="display:none" @change="onFileSelected" />
+            <input ref="smartInput" type="file" accept=".xlsx" style="display:none" @change="onSmartFile" />
           </el-form-item>
         </el-form>
       </el-card>
@@ -723,12 +880,13 @@ onMounted(async () => {
         <div class="table-head">
           <span class="cur-mod">当前模块：<b>{{ activeModule || "全部用例" }}</b>（{{ visibleCases.length }} 条）</span>
           <div v-if="selected.length" style="display: flex; gap: 8px; align-items: center">
-            <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条</span>
+            <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条（跨页保留）</span>
             <el-button v-perm="'case:write'" size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
             <el-button v-perm="'case:write'" size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
+            <el-button size="small" text @click="clearSelection">清空选择</el-button>
           </div>
         </div>
-        <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
+        <el-table ref="tableRef" :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
           <el-table-column type="expand">
             <template #default="{ row }">
               <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
@@ -759,7 +917,7 @@ onMounted(async () => {
               </el-descriptions>
             </template>
           </el-table-column>
-          <el-table-column type="selection" width="45" />
+          <el-table-column type="selection" width="45" reserve-selection />
           <el-table-column prop="case_id" label="用例编号" min-width="150">
             <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
           </el-table-column>
@@ -835,7 +993,7 @@ onMounted(async () => {
         <el-form-item label="接口名称">
           <el-select v-model="form.api_name" filterable allow-create default-first-option clearable
                      placeholder="选已登记接口可带入推荐配置；也可直接输入新名称" style="width: 100%">
-            <el-option v-for="n in apiNameOptions()" :key="n" :value="n" :label="n">
+            <el-option v-for="n in apiNameOptions" :key="n" :value="n" :label="n">
               <span class="opt-key">{{ n }}</span>
               <span class="opt-val">{{ defPreview(n) }}</span>
             </el-option>
@@ -918,14 +1076,31 @@ onMounted(async () => {
         </div>
         <el-button size="small" @click="extRows.push({ key: '', value: '' })">＋ 添加提取</el-button>
 
-        <el-divider content-position="left">断言（至少一条）</el-divider>
-        <div v-for="(a, i) in asrtRows" :key="'a' + i" class="kv-row">
-          <el-select v-model="a.op" placeholder="操作符" style="width: 170px">
-            <el-option v-for="o in meta?.assert_ops ?? []" :key="o.op" :value="o.op" :label="`${o.op} ${o.desc}`" />
-          </el-select>
-          <el-input v-model="a.path" :placeholder="PATH_PH" class="mono" style="flex: 1" />
-          <el-input v-if="opNeedExpected(a.op)" v-model="a.expected" placeholder="期望值" class="mono" style="width: 170px" />
-          <el-button text type="danger" @click="asrtRows.splice(i, 1)">✕</el-button>
+       <el-divider content-position="left">断言（至少一条）</el-divider>
+        <!-- 快捷模板：一键追加常用组合 -->
+        <div class="assert-presets">
+          <span class="hint" style="margin:0;line-height:24px">快捷模板：</span>
+          <el-button v-for="p in ASSERT_PRESETS" :key="p.label" size="small" text type="primary"
+                     @click="applyAssertPreset(p)">{{ p.label }}</el-button>
+        </div>
+        <div v-for="(a, i) in asrtRows" :key="'a' + i">
+          <div class="kv-row">
+            <el-select v-model="a.op" placeholder="验证方式" style="width: 170px">
+              <el-option v-for="o in meta?.assert_ops ?? []" :key="o.op" :value="o.op"
+                         :label="`${o.desc || opLabel(o.op)}（${o.op}）`" />
+            </el-select>
+            <el-select v-model="a.path" filterable allow-create default-first-option
+                       placeholder="验证什么" style="flex: 1">
+              <el-option v-for="p in PATH_PRESETS" :key="p.value" :value="p.value"
+                         :label="p.label">
+                <span class="opt-key">{{ p.label }}</span>
+                <span class="opt-val mono">{{ p.value }}</span>
+              </el-option>
+            </el-select>
+            <el-input v-if="opNeedExpected(a.op)" v-model="a.expected" placeholder="期望值" class="mono" style="width: 170px" />
+            <el-button text type="danger" @click="asrtRows.splice(i, 1)">✕</el-button>
+          </div>
+          <div v-if="a.op && a.path" class="assert-preview">→ {{ assertHint(a) }}</div>
         </div>
         <el-button size="small" @click="asrtRows.push({ op: 'eq', path: '', expected: '' })">＋ 添加断言</el-button>
 
@@ -1010,7 +1185,7 @@ onMounted(async () => {
 
     <!-- 用例依赖管理弹窗 -->
     <el-dialog v-model="depVisible" :title="`配置依赖 ${depCaseId}`" width="480px">
-      <p style="color:#606266; font-size:13px; margin:0 0 12px">执行此用例前，以下前置用例必须全部通过。留空表示无依赖。</p>
+      <p style="color:#606266; font-size:13px; margin:0 0 12px">执行此用例前，以下前置用例必须全部通过。留空表示无依赖。<br/>按条件/全量执行时会自动纳入这些依赖用例并排到前面；依赖失败或被停用时，本用例将被阻塞（不发请求，报告记 skipped）。</p>
       <div v-for="(d, i) in depList" :key="i" style="display:flex; align-items:center; gap:8px; margin-bottom:6px">
         <el-tag closable @close="depList.splice(i, 1)">{{ d }}</el-tag>
       </div>
@@ -1022,6 +1197,66 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="depVisible = false">取消</el-button>
         <el-button type="primary" @click="saveDeps">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 智能导入预览对话框 -->
+    <el-dialog v-model="smartVisible" title="智能导入预览" width="1040px" :close-on-click-modal="false">
+      <div v-loading="smartLoading">
+        <template v-if="smartData">
+          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 10px">
+            <template #default>
+              <div style="font-size: 12px">
+                工作表「{{ smartData.sheet }}」解析 {{ smartData.items.length }} 行 ·
+                {{ smartData.format === 'standard' ? '标准格式' : '非标准表头，已自动映射转换' }}。
+                <b>黄色</b>=已自动补全/猜测（默认值、兜底断言），请核对；<b>红色</b>=无法导入。
+                确认无误后点「确认导入」，只写入勾选行。
+              </div>
+            </template>
+          </el-alert>
+          <div class="smart-cols">
+            <el-tag v-for="cm in smartData.column_map" :key="cm.header" size="small" effect="plain">
+              {{ cm.header }} → {{ FIELD_LABEL[cm.field] ?? cm.field }}
+            </el-tag>
+            <el-tag v-for="h in smartData.unmapped_headers" :key="h" size="small" type="info" effect="plain">
+              {{ h }}（已忽略）
+            </el-tag>
+          </div>
+          <el-table ref="smartTableRef" :data="smartData.items" size="small" max-height="440"
+                    row-key="row" :row-class-name="smartRowClass" style="margin-top: 8px"
+                    @selection-change="(rows: ImportPreviewItem[]) => (smartSelected = rows)">
+            <el-table-column type="selection" width="42" :selectable="smartSelectable" reserve-selection />
+            <el-table-column label="编号" width="120">
+              <template #default="{ row }"><span class="mono">{{ row.case.case_id }}</span></template>
+            </el-table-column>
+            <el-table-column label="描述" min-width="120" show-overflow-tooltip>
+              <template #default="{ row }">{{ row.case.case_desc }}</template>
+            </el-table-column>
+            <el-table-column label="方法" width="66">
+              <template #default="{ row }">{{ row.case.method }}</template>
+            </el-table-column>
+            <el-table-column label="请求路径" min-width="170" show-overflow-tooltip>
+              <template #default="{ row }"><span class="mono">{{ row.case.url }}</span></template>
+            </el-table-column>
+            <el-table-column label="断言" min-width="150" show-overflow-tooltip>
+              <template #default="{ row }"><span class="mono dim">{{ JSON.stringify(row.case.asserts ?? []) }}</span></template>
+            </el-table-column>
+            <el-table-column label="转换标注" min-width="230">
+              <template #default="{ row }">
+                <div v-for="(m, i) in row.marks" :key="i" class="smart-mark" :class="'mk-' + m.level">
+                  {{ m.level === 'error' ? '✖' : m.level === 'warn' ? '⚠' : 'ℹ' }} {{ m.msg }}
+                </div>
+                <div v-if="row.exists" class="smart-mark mk-warn">⚠ 编号已存在于目标文件，将自动跳过</div>
+                <span v-if="!row.marks.length && !row.exists" class="smart-mark mk-ok">✔ 完整识别</span>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+      <template #footer>
+        <span style="float: left; color: #909399; font-size: 12px; line-height: 32px">已选 {{ smartSelected.length }} 条</span>
+        <el-button @click="smartVisible = false">取消</el-button>
+        <el-button type="primary" :loading="smartSaving" :disabled="!smartSelected.length" @click="doSmartImport">确认导入</el-button>
       </template>
     </el-dialog>
   </div>
@@ -1068,4 +1303,16 @@ onMounted(async () => {
 .txt-fail { color: #f56c6c; }
 .txt-ok { color: #67c23a; }
 .dim { color: #909399; font-size: 12px; }
+.assert-preview { font-size: 12px; color: #909399; margin: -2px 0 6px 4px; padding-left: 4px; }
+.assert-presets { margin-bottom: 10px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+/* 智能导入预览 */
+.smart-cols { display: flex; flex-wrap: wrap; gap: 6px; }
+.smart-mark { font-size: 12px; line-height: 1.6; }
+.mk-warn { color: #e6a23c; }
+.mk-error { color: #f56c6c; }
+.mk-info { color: #9099a6; }
+.mk-ok { color: #67c23a; }
+:deep(.row-err) { background: #fef0f0 !important; }
+:deep(.row-warn) { background: #fdf6ec !important; }
+:deep(.row-exist) { color: #a8abb2; }
 </style>

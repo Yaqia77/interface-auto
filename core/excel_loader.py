@@ -34,6 +34,12 @@ VALID_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3", "P4", "P5"}
 ASSERT_OPS = {"eq", "neq", "contains", "gt", "ge", "lt", "le", "regex", "not_null", "len_eq"}
 OPS_NEED_EXPECTED = ASSERT_OPS - {"not_null"}
+# 操作符中文说明（平台 meta 接口下发给前端做汉化显示，与执行引擎解耦）
+ASSERT_OP_LABELS = {
+    "eq": "等于", "neq": "不等于", "contains": "包含",
+    "gt": "大于", "ge": "大于等于", "lt": "小于", "le": "小于等于",
+    "regex": "正则匹配", "not_null": "不为空", "len_eq": "长度等于",
+}
 RUN_TRUE = {"Y", "YES", "TRUE", "是"}
 RUN_FALSE = {"N", "NO", "FALSE", "否"}
 
