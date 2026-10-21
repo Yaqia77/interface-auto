@@ -40,6 +40,9 @@ data/permissions.json
 # 公共脚本库（平台维护的前后置步骤链；缺省为空库，用例不引用即可正常运行）
 data/scripts.json
 
+# 接口定义库（平台沉淀的接口元数据与断言建议；缺省为空库，不影响用例执行）
+data/api_defs.json
+
 # 操作审计留痕（含请求体摘要，可能触及敏感信息，不入库）
 data/audit_logs.jsonl
 

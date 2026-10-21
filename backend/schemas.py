@@ -324,3 +324,71 @@ class ScriptOut(BaseModel):
     steps: list[dict[str, Any]] = Field(default_factory=list)
     used_by: list[str] = Field(default_factory=list, description="引用该脚本的用例编号")
     updated_at: str = ""
+
+
+# ==================== 接口定义库（设计文档 2.2） ====================
+
+
+class ApiDefCreate(BaseModel):
+    """新建接口定义（接口名唯一，同一 方法+路径 也不允许用两个名字重复登记）。"""
+
+    name: str = Field(description="接口名称（与用例的「接口名称」列对齐）")
+    method: str = Field(description="GET/POST/PUT/DELETE/PATCH")
+    path: str = Field(description="请求路径（/ 或 http(s):// 开头；路径参数写 {{id}} 占位符）")
+    module: str = Field(default="未分类", description="所属模块")
+    remark: str = Field(default="", description="用途说明")
+    headers: dict | None = Field(default=None, description="推荐请求头")
+    params: dict | None = Field(default=None, description="推荐查询参数（示例值）")
+    body: Any = Field(default=None, description="推荐请求体（示例值）")
+    extract: dict | None = Field(default=None, description="推荐变量提取，如 {\"token\": \"$.data.token\"}")
+    asserts: list | None = Field(default=None, description="推荐断言 [[操作符, 取值路径, 期望值], ...]")
+
+
+class ApiDefUpdate(BaseModel):
+    """更新接口定义（只传改动字段；被用例同名引用的接口不可改名/不可删）。"""
+
+    name: str | None = None
+    method: str | None = None
+    path: str | None = None
+    module: str | None = None
+    remark: str | None = None
+    headers: dict | None = None
+    params: dict | None = None
+    body: Any = None
+    extract: dict | None = None
+    asserts: list | None = None
+
+
+class ApiDefOut(BaseModel):
+    """接口定义对外视图（used_by 为同名的存量用例编号，即该接口的用例覆盖情况）。"""
+
+    name: str
+    module: str = "未分类"
+    method: str
+    path: str
+    remark: str = ""
+    headers: dict | None = None
+    params: dict | None = None
+    body: Any = None
+    extract: dict | None = None
+    asserts: list | None = None
+    source: str = Field(default="manual", description="来源：manual/excel/openapi")
+    used_by: list[str] = Field(default_factory=list, description="接口名称同名的用例编号")
+    updated_at: str = ""
+
+
+class OpenApiImport(BaseModel):
+    """导入 OpenAPI / Swagger 文档原文（JSON 或 YAML 均可）。"""
+
+    text: str = Field(description="文档原文（整份 spec，不是 URL）")
+    overwrite: bool = Field(default=False, description="同名接口已存在时是否覆盖（false 则逐条跳过）")
+
+
+class SkeletonCreate(BaseModel):
+    """由接口定义生成用例骨架（一行一个用例编号）。"""
+
+    case_ids: list[str] = Field(description="要生成的用例编号列表（每个编号写入一行）")
+    case_desc: str | None = Field(default=None, description="用例描述，留空用「接口名 正常流程」")
+    priority: str = Field(default="P2", description="P0~P5")
+    run: bool = Field(default=True, description="是否执行（Y/N）")
+    dry_run: bool = Field(default=True, description="默认只返回预览行，确认后再落 Excel")

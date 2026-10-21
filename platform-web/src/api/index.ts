@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -272,6 +272,38 @@ export const api = {
 
   deleteScript: (name: string) =>
     http.delete<{ deleted: string }>(`/scripts/${encodeURIComponent(name)}`).then((r) => r.data),
+
+  /* ---------- 接口定义库（设计文档 2.2：接口库沉淀 + OpenAPI 导入 + 生成用例骨架） ---------- */
+  listApiDefs: () => http.get<ApiDefItem[]>("/defs").then((r) => r.data),
+
+  /** 接口编辑元数据（方法/断言操作符/长度上限/导入限额） */
+  getApiDefMeta: () => http.get<ApiDefMeta>("/defs/meta").then((r) => r.data),
+
+  getApiDef: (name: string) =>
+    http.get<ApiDefItem>(`/defs/${encodeURIComponent(name)}`).then((r) => r.data),
+
+  createApiDef: (body: ApiDefCreateReq) =>
+    http.post<ApiDefItem>("/defs", body).then((r) => r.data),
+
+  /** 更新定义（只传改动字段；被同名用例引用时不可改名，返 409） */
+  updateApiDef: (name: string, body: ApiDefUpdateReq) =>
+    http.put<ApiDefItem>(`/defs/${encodeURIComponent(name)}`, body).then((r) => r.data),
+
+  deleteApiDef: (name: string) =>
+    http.delete<{ deleted: string }>(`/defs/${encodeURIComponent(name)}`).then((r) => r.data),
+
+  /** 把存量 Excel 用例收敛成接口库（同名合并，方法/路径/断言按频次投票） */
+  aggregateApiDefs: (overwrite = false) =>
+    http.post<AggregateResult>("/defs/aggregate", null, { params: { overwrite } }).then((r) => r.data),
+
+  /** 导入 OpenAPI/Swagger 文档原文（JSON 或 YAML，大文档放宽超时） */
+  importOpenApi: (text: string, overwrite = false) =>
+    http.post<OpenApiImportResult>("/defs/import/openapi", { text, overwrite },
+      { timeout: 120000 }).then((r) => r.data),
+
+  /** 由接口定义生成用例骨架（dry_run=true 只预览，=false 才追写 Excel） */
+  genSkeleton: (name: string, body: SkeletonReq) =>
+    http.post<SkeletonResult>(`/defs/${encodeURIComponent(name)}/skeleton`, body).then((r) => r.data),
 
   /* ---------- Webhook 通知管理 ---------- */
   listWebhooks: () => http.get<WebhookItem[]>("/webhooks").then((r) => r.data),

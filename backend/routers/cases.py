@@ -124,6 +124,8 @@ def case_meta(file: str = Query(default="data/api_cases.xlsx")):
                        for o in sorted(excel_loader.ASSERT_OPS)],
         "modules": sorted({c.module for c in result.cases}),
         "header_suggest": header_suggest,
+        # 接口名候选：存量用例出现过的名称（设计文档 2.2 的接口定义库另由 /api/defs 提供带断言建议的那一份）
+        "api_names": sorted({c.api_name for c in result.cases if c.api_name}),
         "variables": sorted(set(result.variables) |
                             set(excel_loader.load_secret_vars(ROOT / "data" / "secret_vars.xlsx"))),
     }

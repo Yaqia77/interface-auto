@@ -79,6 +79,8 @@ export interface CaseMeta {
   assert_ops: AssertOpInfo[];
   modules: string[];
   header_suggest: HeaderSuggest[];
+  /** 存量用例出现过的接口名（接口定义库另由 /api/defs 提供带断言建议的那一份） */
+  api_names?: string[];
   variables: string[];
 }
 
@@ -398,4 +400,114 @@ export interface ScriptMeta {
   ops_need_expected: string[];
   path_options: { path: string; desc: string }[];
   variables: string[];
+}
+
+/**
+ * 接口定义（设计文档 2.2）：接口库元数据。
+ * 用例仍自带完整请求要素，删定义不影响执行；used_by 为接口名称同名的用例编号。
+ */
+export interface ApiDefItem {
+  name: string;
+  module: string;
+  method: string;
+  path: string;
+  remark: string;
+  headers: Record<string, unknown> | null;
+  params: Record<string, unknown> | null;
+  body: unknown;
+  extract: Record<string, string> | null;
+  asserts: unknown[][] | null;
+  source: string;      // manual | excel | openapi
+  used_by: string[];
+  updated_at: string;
+}
+
+export interface ApiDefCreateReq {
+  name: string;
+  method: string;
+  path: string;
+  module?: string;
+  remark?: string;
+  headers?: Record<string, unknown> | null;
+  params?: Record<string, unknown> | null;
+  body?: unknown;
+  extract?: Record<string, string> | null;
+  asserts?: unknown[][] | null;
+}
+
+/** 更新：只传改动字段；headers/params/body/extract/asserts 传空对象/空数组即清空 */
+export type ApiDefUpdateReq = Partial<ApiDefCreateReq>;
+
+/** 接口编辑元数据（/api/defs/meta），常量与后端同源 */
+export interface ApiDefMeta {
+  methods: string[];
+  assert_ops: AssertOpInfo[];
+  ops_need_expected: string[];
+  path_options: { path: string; desc: string }[];
+  default_asserts: unknown[][];
+  modules: string[];
+  name_max: number;
+  module_max: number;
+  remark_max: number;
+  assert_max: number;
+  sources: { value: string; label: string }[];
+  spec_limit_mb: number;
+  variables: string[];
+  def_count: number;
+}
+
+/** 从存量用例聚合的结果 */
+export interface AggregateResult {
+  file: string;
+  scanned_cases: number;
+  groups: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  conflicts: string[];
+  rejected: string[];   // 接口名不合规（如含 /）被跳过的分组
+}
+
+/** OpenAPI/Swagger 导入结果 */
+export interface OpenApiImportResult {
+  parsed: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  conflicts: string[];
+  skipped_notes: string[];
+  note_count: number;
+}
+
+/** 由接口定义生成用例骨架（默认 dry_run 只预览） */
+export interface SkeletonReq {
+  case_ids: string[];
+  case_desc?: string;
+  priority?: string;
+  run?: boolean;
+  dry_run?: boolean;
+}
+
+export interface SkeletonCase {
+  case_id: string;
+  api_name: string;
+  module: string;
+  case_desc: string;
+  priority: string;
+  run: boolean;
+  method: string;
+  url: string;
+  asserts: unknown[][];
+  headers?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  extract?: Record<string, string>;
+  body?: unknown;
+}
+
+export interface SkeletonResult {
+  dry_run: boolean;
+  file: string;
+  cases: SkeletonCase[];
+  written: string[];
+  errors: string[];
 }

@@ -41,6 +41,7 @@ _MODULE_BY_PREFIX = (
     ("/api/auth", "认证与用户"),
     ("/api/audit", "操作审计"),
     ("/api/cases", "用例管理"),
+    ("/api/defs", "接口定义"),
     ("/api/dependencies", "用例依赖"),
     ("/api/plans", "测试场景"),
     ("/api/runs", "执行与报告"),
@@ -57,7 +58,7 @@ _MODULE_BY_PREFIX = (
 _NOISE_TAIL = {
     "runs", "cases", "users", "plans", "login", "logout", "me", "cleanup", "audit",
     "secrets", "schedules", "notifications", "dependencies", "envs", "auth", "health", "config",
-    "webhooks", "scripts",
+    "webhooks", "scripts", "defs", "aggregate", "skeleton", "openapi",
 }
 
 

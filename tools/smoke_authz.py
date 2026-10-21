@@ -317,6 +317,13 @@ def main():
         ("POST", "/api/scripts", {"name": None}, "新建公共脚本", "script:manage"),
         ("PUT", "/api/scripts/ia_smoke_no_such", {"remark": "x"}, "更新公共脚本", "script:manage"),
         ("DELETE", "/api/scripts/ia_smoke_no_such", None, "删除公共脚本", "script:manage"),
+        ("POST", "/api/defs", {"name": None}, "新建接口定义", "api:manage"),
+        ("PUT", "/api/defs/ia_smoke_no_such", {"remark": "x"}, "更新接口定义", "api:manage"),
+        ("DELETE", "/api/defs/ia_smoke_no_such", None, "删除接口定义", "api:manage"),
+        # 聚合必须指向读不到的用例文件：404 落在 upsert 之前，才会一次写入都没有
+        ("POST", "/api/defs/aggregate?file=data/~$no_such.xlsx", None, "聚合接口定义", "api:manage"),
+        ("POST", "/api/defs/import/openapi", {"text": ""}, "导入 OpenAPI 文档", "api:manage"),
+        ("POST", "/api/defs/ia_smoke_no_such/skeleton", {"case_ids": []}, "生成用例骨架", "case:write"),
         ("POST", "/api/runs/ia_smoke_no_such/cancel", None, "取消批次", "run:create"),
     ]
 
@@ -327,7 +334,7 @@ def main():
         snap["用例"] = page.get("total") if code == 200 else None
         for key, path in (("场景", "/api/plans"), ("凭证", "/api/secrets"),
                           ("Webhook", "/api/webhooks"), ("定时任务", "/api/schedules"),
-                          ("公共脚本", "/api/scripts")):
+                          ("公共脚本", "/api/scripts"), ("接口定义", "/api/defs")):
             code, resp = req("GET", path, token=admin_token)
             if code != 200:
                 snap[key] = None
@@ -373,7 +380,7 @@ def main():
     check("dev 取消批次落到业务 404（已穿过权限层）", code == 404, f"{code} {resp}")
 
     after = snapshot()
-    check("一轮探测零副作用（用例/场景/凭证/Webhook/定时/脚本/环境均未变）",
+    check("一轮探测零副作用（用例/场景/凭证/Webhook/定时/脚本/接口/环境均未变）",
           before == after, {k: (before[k], after[k]) for k in before if before[k] != after[k]})
 
     code, resp = req("GET",

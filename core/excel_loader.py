@@ -293,6 +293,29 @@ def _parse_body(value, err):
     return stripped  # 非 JSON 文本，按原始字符串请求体处理
 
 
+def check_assert_rules(rules) -> list:
+    """断言规则结构校验，返回错误说明列表（空列表即全部合法）。
+
+    公开给平台侧复用（接口定义库的「断言建议」终要写进用例的断言列），
+    保证库里推荐的断言与 Excel 读取口径完全一致，不会出现「库里存得下、用例读不了」。
+    """
+    errors: list[str] = []
+    for i, rule in enumerate(rules or [], 1):
+        if not isinstance(rule, (list, tuple)) or not 2 <= len(rule) <= 3:
+            errors.append(f"第{i}条格式错误，应为 [操作符, 取值路径, 期望值]，如 [\"eq\",\"$.code\",0]")
+            continue
+        op = str(rule[0]).strip().lower()
+        if op not in ASSERT_OPS:
+            errors.append(f"第{i}条操作符 {rule[0]!r} 不支持，可用: {', '.join(sorted(ASSERT_OPS))}")
+            continue
+        if len(rule) < 3 and op in OPS_NEED_EXPECTED:
+            errors.append(f"第{i}条操作符 {op} 需要期望值")
+            continue
+        if not str(rule[1] or "").strip():
+            errors.append(f"第{i}条取值路径不能为空")
+    return errors
+
+
 def _parse_asserts(value, err):
     """断言列：JSON 数组，元素为 [操作符, 取值路径, 期望值]。"""
     if value in (None, ""):
@@ -306,20 +329,10 @@ def _parse_asserts(value, err):
     if not isinstance(rules, list) or not rules:
         err("asserts", "必须是 JSON 数组且至少一条，如 [[\"eq\",\"status_code\",200]]")
         return False
-    for i, rule in enumerate(rules, 1):
-        if not isinstance(rule, (list, tuple)) or not 2 <= len(rule) <= 3:
-            err("asserts", f"第{i}条格式错误，应为 [操作符, 取值路径, 期望值]，如 [\"eq\",\"$.code\",0]")
-            return False
-        op = str(rule[0]).strip().lower()
-        if op not in ASSERT_OPS:
-            err("asserts", f"第{i}条操作符 {rule[0]!r} 不支持，可用: {', '.join(sorted(ASSERT_OPS))}")
-            return False
-        if len(rule) < 3 and op in OPS_NEED_EXPECTED:
-            err("asserts", f"第{i}条操作符 {op} 需要期望值")
-            return False
-        if not str(rule[1] or "").strip():
-            err("asserts", f"第{i}条取值路径不能为空")
-            return False
+    msgs = check_assert_rules(rules)
+    if msgs:
+        err("asserts", msgs[0])
+        return False
     return rules
 
 

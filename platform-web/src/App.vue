@@ -58,6 +58,7 @@ function onUserCommand(cmd: string) {
         </el-menu-item-group>
         <el-menu-item-group title="测试管理">
           <el-menu-item index="/cases">📋 用例管理</el-menu-item>
+          <el-menu-item v-perm="'api:manage'" index="/defs">📚 接口定义</el-menu-item>
           <el-menu-item index="/plans">📁 测试场景</el-menu-item>
           <el-menu-item v-perm="'script:manage'" index="/scripts">🧩 公共脚本</el-menu-item>
         </el-menu-item-group>

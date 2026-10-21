@@ -31,6 +31,12 @@ const router = createRouter({
       meta: { title: "用例管理" },
     },
     {
+      path: "/defs",
+      name: "defs",
+      component: () => import("../views/ApiDefsView.vue"),
+      meta: { title: "接口定义", perm: "api:manage" },
+    },
+    {
       path: "/plans",
       name: "plans",
       component: () => import("../views/PlansView.vue"),

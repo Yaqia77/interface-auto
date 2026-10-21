@@ -2,9 +2,9 @@
 /** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { CaseHistoryResp, CaseItem, CaseMeta, ScriptItem } from "../types";
+import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ScriptItem } from "../types";
 
 const router = useRouter();
 const route = useRoute();
@@ -103,6 +103,9 @@ function goExecute() {
 const prioType = (p: string) =>
   ({ P0: "danger", P1: "warning", P2: "info", P3: "info", P4: "info", P5: "info" }[p] ?? "info");
 
+/** 接口定义来源说明（与 /api/defs 后端 SOURCE_LABELS 同口径） */
+const SOURCE_LABEL: Record<string, string> = { manual: "手工录入", excel: "Excel 聚合", openapi: "OpenAPI 导入" };
+
 const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 
 /* ================= 编辑抽屉 ================= */
@@ -137,6 +140,67 @@ async function loadScripts() {
   try {
     scriptOptions.value = await api.listScripts();
   } catch { /* 拿不到候选不阻断用例编辑 */ }
+}
+
+/* 接口定义候选（设计文档 2.2）：接口库是元数据，用它给「接口名称」提供建议并一键带入配置；
+   拿不到定义库时接口名称仍可自由输入，用例保存逻辑完全不依赖它。 */
+const apiDefs = ref<ApiDefItem[]>([]);
+async function loadApiDefs() {
+  try {
+    apiDefs.value = await api.listApiDefs();
+  } catch { /* 无 api:manage 权限或后端未落库时静默降级为自由文本 */ }
+}
+
+/** 名称 → 定义，同名只有一条定义（后端按名称唯一） */
+const defByName = computed(() => new Map(apiDefs.value.map((d) => [d.name, d])));
+
+/** 候选 = 已有用例的接口名 ∪ 接口库定义名：前者保证不改名时也能选回原值 */
+const apiNameOptions = computed(() => {
+  const set = new Set<string>(meta.value?.api_names ?? []);
+  apiDefs.value.forEach((d) => set.add(d.name));
+  if (form.api_name.trim()) set.add(form.api_name.trim());
+  return [...set].sort((a, b) => a.localeCompare(b, "zh"));
+});
+
+const matchedDef = computed(() => defByName.value.get(form.api_name.trim()) ?? null);
+
+const defPreview = (name: string) => {
+  const d = defByName.value.get(name);
+  return d ? `${d.method} ${d.path}` : "未登记";
+};
+
+const isPlainObj = (v: unknown): v is Record<string, unknown> =>
+  !!v && typeof v === "object" && !Array.isArray(v);
+
+/** 把接口库里的定义填进当前抽屉表单（仅改表单，落盘仍要点保存并走全量校验） */
+async function applyDef() {
+  const d = matchedDef.value;
+  if (!d) return;
+  const willBring: string[] = ["方法", "请求路径"];
+  if (isPlainObj(d.headers) && Object.keys(d.headers).length) willBring.push("请求头");
+  if (isPlainObj(d.params) && Object.keys(d.params).length) willBring.push("查询参数");
+  if (d.body != null && d.body !== "") willBring.push("请求体");
+  if (d.extract && Object.keys(d.extract).length) willBring.push("变量提取");
+  if (d.asserts?.length) willBring.push("推荐断言");
+  try {
+    await ElMessageBox.confirm(
+      `将用接口库中 <b>${d.name}</b> 的定义覆盖当前表单的 ${willBring.join("、")}。<br>
+       覆盖后仍需在抽屉里点保存才会写回 Excel，中途取消不影响用例。`,
+      "带入推荐配置",
+      { type: "info", dangerouslyUseHTMLString: true, confirmButtonText: "覆盖并填入", cancelButtonText: "取消" },
+    );
+  } catch {
+    return;
+  }
+  form.method = d.method;
+  form.url = d.path;
+  if (!form.module.trim() && d.module) form.module = d.module;
+  if (isPlainObj(d.headers) && Object.keys(d.headers).length) hdrRows.value = objToRows(d.headers);
+  if (isPlainObj(d.params) && Object.keys(d.params).length) prmRows.value = objToRows(d.params);
+  if (d.extract && Object.keys(d.extract).length) extRows.value = objToRows(d.extract);
+  if (d.asserts?.length) asrtRows.value = assertsToRows(d.asserts);
+  if (d.body != null && d.body !== "") form.body = jsonText(d.body);
+  ElMessage.success(`已带入 ${willBring.join("、")}，业务参数请按需补全`);
 }
 
 const hdrRows = ref<KvRow[]>([]);
@@ -593,6 +657,7 @@ onMounted(async () => {
   search();
   try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
   loadScripts();
+  loadApiDefs();
 });
 </script>
 
@@ -768,7 +833,22 @@ onMounted(async () => {
           <div class="hint" style="margin: 4px 0 0">模块为自由文本：输入新名称并回车即归入全新模块（不限于下方候选）。</div>
         </el-form-item>
         <el-form-item label="接口名称">
-          <el-input v-model="form.api_name" />
+          <el-select v-model="form.api_name" filterable allow-create default-first-option clearable
+                     placeholder="选已登记接口可带入推荐配置；也可直接输入新名称" style="width: 100%">
+            <el-option v-for="n in apiNameOptions()" :key="n" :value="n" :label="n">
+              <span class="opt-key">{{ n }}</span>
+              <span class="opt-val">{{ defPreview(n) }}</span>
+            </el-option>
+          </el-select>
+          <div class="hint" style="margin: 4px 0 0">
+            <template v-if="matchedDef">
+              已登记：<span class="mono">{{ matchedDef.method }} {{ matchedDef.path }}</span>
+              （{{ SOURCE_LABEL[matchedDef.source] ?? matchedDef.source }}，被 {{ matchedDef.used_by.length }} 条用例引用）
+              <el-button link type="primary" size="small" @click="applyDef">带入推荐配置</el-button>
+            </template>
+            <template v-else-if="form.api_name.trim()">该名称未登记在接口库，仅作为本用例的接口名保存。</template>
+            <template v-else>接口名称是用例与接口库的关联锚点：与定义同名才计入覆盖统计，去「接口定义」页可沉淀库。</template>
+          </div>
         </el-form-item>
         <el-form-item label="用例描述">
           <el-input v-model="form.case_desc" type="textarea" :rows="2" />

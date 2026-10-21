@@ -14,8 +14,8 @@ from fastapi.responses import JSONResponse
 from loguru import logger
 
 from backend import audit_store, authz, config_writer, scheduler, user_store
-from backend.routers import (audit, auth, cases, dependencies, notifications, plans, runs,
-                             schedules, scripts, secrets)
+from backend.routers import (api_defs, audit, auth, cases, dependencies, notifications,
+                             plans, runs, schedules, scripts, secrets)
 from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
@@ -35,6 +35,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(api_defs.router)
 app.include_router(auth.router)
 app.include_router(audit.router)
 app.include_router(cases.router)
