@@ -1,8 +1,15 @@
-"""认证与用户管理接口：登录/登出/当前用户 + 用户 CRUD（仅 admin）。"""
+"""认证与用户管理接口：登录/登出/当前用户 + 用户 CRUD + 角色权限矩阵（仅 admin）。"""
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend import authz, user_store
-from backend.schemas import LoginRequest, LoginResponse, UserCreate, UserOut, UserUpdate
+from backend import authz, perm_store, user_store
+from backend.schemas import (
+    LoginRequest,
+    LoginResponse,
+    PermMatrixUpdate,
+    UserCreate,
+    UserOut,
+    UserUpdate,
+)
 
 router = APIRouter(prefix="/api/auth", tags=["用户与权限"])
 
@@ -46,6 +53,49 @@ def logout(request: Request):
 @router.get("/me", response_model=UserOut, summary="当前登录用户（含权限码列表）")
 def me(user: dict = Depends(authz.get_current_user)):
     return _public(user, with_perms=True)
+
+
+# ---------- 角色权限矩阵（设计文档 8.2，仅 admin） ----------
+
+@router.get("/permissions", summary="角色权限矩阵（码目录 + 当前分配 + 默认基线 + 护栏规则）")
+def get_permissions(_: dict = Depends(authz.require_perm("user:manage"))):
+    m = perm_store.matrix()
+    return {
+        "roles": [{"value": r, "label": user_store.ROLE_NAMES.get(r, r)} for r in user_store.ROLES],
+        "catalog": [
+            {"code": code, "name": name, "desc": desc, "roles": m.get(code, [])}
+            for code, (name, desc) in perm_store.CATALOG.items()
+        ],
+        "matrix": m,
+        "defaults": perm_store.DEFAULT_MATRIX,
+        "rules": {"locked_role": perm_store.LOCKED_ROLE, "must_nonempty": list(perm_store.MUST_NONEMPTY)},
+    }
+
+
+@router.put("/permissions", summary="保存角色权限矩阵（热生效，含防锁死护栏）")
+def update_permissions(body: PermMatrixUpdate, actor: dict = Depends(authz.require_perm("user:manage"))):
+    before = perm_store.matrix()
+    try:
+        after = perm_store.save(body.matrix)
+    except perm_store.PermConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "matrix": after,
+        "changed": perm_store.diff(before, after),
+        # 回带当前登录人所属角色的新权限集，前端据此即时对齐按钮/菜单，无需重登
+        "actor_permissions": authz.permissions_of(actor.get("role", "")),
+    }
+
+
+@router.post("/permissions/reset", summary="恢复默认权限矩阵（代码基线）")
+def reset_permissions(actor: dict = Depends(authz.require_perm("user:manage"))):
+    before = perm_store.matrix()
+    after = perm_store.reset()
+    return {
+        "matrix": after,
+        "changed": perm_store.diff(before, after),
+        "actor_permissions": authz.permissions_of(actor.get("role", "")),
+    }
 
 
 # ---------- 用户管理（仅 admin） ----------

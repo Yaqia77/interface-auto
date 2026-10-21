@@ -207,12 +207,14 @@ cd platform-web ; npm run dev
 .venv\Scripts\python.exe tools\smoke_authz.py
 ```
 
-角色与权限矩阵（`backend/authz.py`）：
+角色与权限矩阵（默认基线写在 `backend/perm_store.py`，可在「系统管理 → 角色权限」页勾选调整，自定义分配存 `data/permissions.json`）：
 
 | 权限码 | admin | tl | qa | dev | viewer |
 |---|---|---|---|---|---|
 | `case:write` 用例编辑/导入 | ✓ | ✓ | ✓ | | |
 | `case:delete` 用例删除 | ✓ | ✓ | | | |
+| `api:manage` 接口定义管理 | ✓ | ✓ | ✓ | | |
+| `script:manage` 公共脚本管理 | ✓ | ✓ | ✓ | | |
 | `plan:manage` 测试场景管理 | ✓ | ✓ | ✓ | | |
 | `run:create` 触发/取消执行 | ✓ | ✓ | ✓ | ✓ | |
 | `env:manage` / `secret:manage` / `webhook:manage` / `schedule:manage` | ✓ | ✓ | | | |
@@ -233,6 +235,11 @@ cd platform-web ; npm run dev
   操作人/角色/动作/对象/请求摘要/结果/IP，入口在侧栏「系统管理 → 操作审计」（admin/tl 可见）；
   `password`、`token` 类字段与 Bearer 串写入前统一脱敏为 `***`，明文密码与凭证**绝不落盘**；
   文件超 2MB 自动裁剪最旧记录，页面支持按操作人/时间/仅失败筛选与 CSV 导出（Excel 双击不乱码）
+- 权限矩阵可视化编辑（「系统管理 → 角色权限」，仅 admin）：界面只能改「权限码 → 角色」的分配，
+  **不能凭空造码**（码目录由代码固定，否则前端 `v-perm` 会失效）；保存后按文件 mtime 热加载，
+  **已登录会话无需重新登录即刻按新矩阵判定**（被收回权限者下一个请求即 403）；
+  内置防锁死护栏：`user:manage`/`audit:manage` 强制保留给 admin，`run:create` 等关键码不允许全员为空，
+  违反一律 400 并回具体原因；页面保存前展示人类可读的变更清单，每次变更自动落审计
 
 ## 路线图
 
@@ -241,3 +248,4 @@ cd platform-web ; npm run dev
 - [ ] v2：页面版（FastAPI + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
   - [x] v2 骨架：用例/场景/执行/报告/环境/凭证/通知/定时任务 + 登录与 RBAC 权限
   - [x] v2 审计：写操作与登录尝试留痕、脱敏落盘、筛选查询与 CSV 导出、超量自动裁剪
+  - [x] v2 权限：角色权限矩阵可视化编辑（勾选即改，热生效 + 防锁死护栏 + 变更落审计）

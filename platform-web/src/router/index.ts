@@ -73,6 +73,12 @@ const router = createRouter({
       meta: { title: "用户管理", perm: "user:manage" },
     },
     {
+      path: "/roles",
+      name: "roles",
+      component: () => import("../views/RolesView.vue"),
+      meta: { title: "角色权限", perm: "user:manage" },
+    },
+    {
       path: "/audit",
       name: "audit",
       component: () => import("../views/AuditView.vue"),

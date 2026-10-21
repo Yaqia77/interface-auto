@@ -6,7 +6,7 @@
     python tools/smoke_authz.py                  # 默认打 127.0.0.1:8000
     set IA_BASE=http://127.0.0.1:8899 && python tools/smoke_authz.py
 
-覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD、操作审计留痕。
+覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD、操作审计留痕、角色权限矩阵可视化编辑。
 脚本只在 reports/ 下造一个 1970 年的假批次并删除它，不触碰任何真实报告，可重复执行。
 """
 import json
@@ -218,6 +218,73 @@ def main():
     # 回收本轮自建账号：smoke_qa 已在第 4 节删除，此处只回收 smoke_aud
     code, resp = req("DELETE", "/api/auth/users/smoke_aud", token=admin_token)
     check("冒烟测试账号已回收", code == 200, f"{code} {resp}")
+
+    print("== 6. 角色权限矩阵可视化编辑（8.2） ==")
+    code, resp = req("GET", "/api/auth/permissions")
+    check("未登录取权限矩阵 401", code == 401, f"{code} {resp}")
+    code, resp = req("GET", "/api/auth/permissions", token=qa_token)
+    check("qa 取权限矩阵被拒 403", code == 403, f"{code} {resp}")
+    code, resp = req("GET", "/api/auth/permissions", token=admin_token)
+    check("admin 可取权限矩阵", code == 200 and len(resp.get("catalog", [])) >= 12 and resp.get("roles"),
+          f"{code} catalog={len(resp.get('catalog', []))}")
+    check("权限码附中文名与说明",
+          all(c.get("name") and c.get("desc") for c in resp.get("catalog", [])))
+    check("防锁死护栏规则随矩阵下发", bool(resp.get("rules", {}).get("locked_role")), resp.get("rules"))
+    base = dict(resp["matrix"])
+    check("基线：tl 持有报告删除", "tl" in base.get("report:delete", []), base.get("report:delete"))
+    check("基线：tl 不能管用户", "tl" not in base.get("user:manage", []), base.get("user:manage"))
+
+    # 热生效实证：tl 的 token 早已签发，改矩阵后不重登就必须立刻失去 cleanup 能力
+    code, resp = req("POST", "/api/runs/cleanup?keep=9999", token=tl_token)
+    check("改动前 tl 可清理旧报告", code == 200, f"{code} {resp}")
+    revoked = {k: list(v) for k, v in base.items()}
+    revoked["report:delete"] = [r for r in revoked["report:delete"] if r != "tl"]
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": revoked}, admin_token)
+    check("保存矩阵：收回 tl 的报告删除",
+          code == 200 and "报告删除" in "".join(resp.get("changed", [])),
+          f"{code} {resp.get('changed')}")
+    # 操作人（admin）自身权限未被变更，回带的权限集应与 /auth/me 完全一致，前端直接套用即可
+    code, me_now = req("GET", "/api/auth/me", token=admin_token)
+    check("保存接口回带的权限集与 /auth/me 一致（免重登对齐）",
+          code == 200 and me_now.get("permissions") == resp.get("actor_permissions"),
+          resp.get("actor_permissions"))
+    code, resp = req("POST", "/api/runs/cleanup?keep=9999", token=tl_token)
+    check("收回后 tl 未重新登录即 403（热生效）", code == 403, f"{code} {resp}")
+
+    # 四类拒绝：凭空造码 / 破坏 admin 锁死 / 关键码全员为空 / 提交不完整
+    forged = {k: list(v) for k, v in base.items()}
+    forged["delete:everything"] = ["qa"]
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": forged}, admin_token)
+    check("凭空造未知权限码被拒 400", code == 400, f"{code} {resp}")
+    locked_break = {k: list(v) for k, v in base.items()}
+    locked_break["user:manage"] = ["tl"]
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": locked_break}, admin_token)
+    check("收回 admin 的用户管理被拒（防锁死）", code == 400, f"{code} {resp}")
+    empty_run = {k: list(v) for k, v in base.items()}
+    empty_run["run:create"] = []
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": empty_run}, admin_token)
+    check("触发执行权限全员清空被拒 400", code == 400, f"{code} {resp}")
+    partial = {k: list(v) for k, v in base.items() if k != "case:write"}
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": partial}, admin_token)
+    check("提交缺码矩阵被拒 400", code == 400, f"{code} {resp}")
+    bad_role = {k: list(v) for k, v in base.items()}
+    bad_role["case:write"] = ["superman"]
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": bad_role}, admin_token)
+    check("非法角色名被拒 400", code == 400, f"{code} {resp}")
+
+    code, resp = req("PUT", "/api/auth/permissions", {"matrix": base}, admin_token)
+    check("在页面上改回原值可保存", code == 200, f"{code} {resp}")
+    code, resp = req("POST", "/api/auth/permissions/reset", token=admin_token)
+    check("恢复默认矩阵成功", code == 200 and "tl" in resp["matrix"].get("report:delete", []), f"{code} {resp}")
+    code, resp = req("POST", "/api/runs/cleanup?keep=9999", token=tl_token)
+    check("恢复后 tl 清理旧报告能力回归", code == 200, f"{code} {resp}")
+
+    code, resp = req("GET", "/api/audit/logs?keyword=%E8%A7%92%E8%89%B2%E6%9D%83%E9%99%90&limit=50", token=admin_token)
+    perm_logs = resp.get("items", []) if code == 200 else []
+    check("权限变更已落审计留痕", code == 200 and len(perm_logs) >= 2, f"{code} {len(perm_logs)}")
+    if perm_logs:
+        check("审计可回溯到具体权限动作", any("权限" in (h.get("action") or "") for h in perm_logs),
+              perm_logs[0].get("action"))
 
     # ---- 收尾：删除假批次目录（不碰任何真实报告） ----
     shutil.rmtree(FAKE_DIR, ignore_errors=True)

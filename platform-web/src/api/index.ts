@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -51,6 +51,17 @@ export const api = {
 
   deleteUser: (username: string) =>
     http.delete<{ ok: boolean }>(`/auth/users/${encodeURIComponent(username)}`).then((r) => r.data),
+
+  /* ---------- 角色权限矩阵（8.2，仅 admin） ---------- */
+
+  /** 权限码目录 + 当前分配 + 默认基线 + 护栏规则 */
+  getPermissions: () => http.get<PermMatrixResp>("/auth/permissions").then((r) => r.data),
+
+  /** 整体提交矩阵；后端校验不过（造码/缺码/破坏护栏）一律 400 并回具体原因 */
+  updatePermissions: (matrix: Record<string, string[]>) =>
+    http.put<PermSaveResp>("/auth/permissions", { matrix }).then((r) => r.data),
+
+  resetPermissions: () => http.post<PermSaveResp>("/auth/permissions/reset").then((r) => r.data),
 
   /* ---------- 操作审计（admin/tl） ---------- */
   listAuditLogs: (params: {

@@ -1,7 +1,8 @@
 <script setup lang="ts">
 /**
  * 用户管理（仅 admin 可见/可访问）：账号增删改 + 角色分配 + 启停 + 重置密码。
- * 角色权限矩阵由后端 authz.PERMISSIONS 定义，本页只做只读展示。
+ * 权限码→角色的具体分配只在「角色权限」页维护（后端 data/permissions.json 单一来源），
+ * 本页不再复刻一份矩阵，避免两处口径打架。
  */
 import { computed, onMounted, reactive, ref } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -21,14 +22,20 @@ const ROLE_OPTIONS = [
 ];
 const roleName = (r: string) => ROLE_OPTIONS.find((o) => o.value === r)?.label ?? r;
 
-/** 角色权限矩阵说明（与设计文档一致，前端静态展示） */
-const PERM_MATRIX: Record<string, string[]> = {
-  admin: ["全部权限（含用户管理）"],
-  tl: ["用例/场景/执行/报告删除", "环境·凭证·通知·定时任务管理"],
-  qa: ["用例编辑与导入", "场景管理", "触发执行"],
-  dev: ["只读查看 + 触发执行"],
-  viewer: ["全站只读"],
+/** 角色定位说明（具体权限项见「角色权限」页，此处不复述矩阵） */
+const ROLE_DESC: Record<string, string> = {
+  admin: "平台最高权限，唯一可管理用户与权限分配",
+  tl: "负责人：删除类与配置类高危操作",
+  qa: "主力：用例、场景、执行",
+  dev: "开发：查看 + 触发执行",
+  viewer: "只读访客：全站仅查看",
 };
+
+const roleUserCount = computed(() => {
+  const map: Record<string, number> = {};
+  for (const u of users.value) map[u.role] = (map[u.role] ?? 0) + 1;
+  return map;
+});
 
 async function load() {
   loading.value = true;
@@ -116,7 +123,7 @@ const dialogTitle = computed(() => (mode.value === "create" ? "新建用户" : `
 <template>
   <div>
     <div class="page-header">
-      <span class="page-title">共 {{ users.length }} 个账号 · 权限矩阵见右侧说明</span>
+      <span class="page-title">共 {{ users.length }} 个账号 · 权限分配在「角色权限」页维护</span>
       <el-button type="primary" @click="openCreate">+ 新建用户</el-button>
     </div>
 
@@ -158,12 +165,18 @@ const dialogTitle = computed(() => (mode.value === "create" ? "新建用户" : `
 
       <el-col :span="7">
         <el-card shadow="never" class="perm-card">
-          <template #header><b>角色权限矩阵</b></template>
+          <template #header>
+            <div class="card-head">
+              <b>角色说明</b>
+              <el-button text type="primary" size="small" @click="$router.push('/roles')">去分配权限 ›</el-button>
+            </div>
+          </template>
           <div v-for="r in ROLE_OPTIONS" :key="r.value" class="perm-row">
-            <el-tag size="small" :type="r.value === 'admin' ? 'danger' : 'info'" effect="plain">{{ r.label }}</el-tag>
-            <ul>
-              <li v-for="p in PERM_MATRIX[r.value]" :key="p">{{ p }}</li>
-            </ul>
+            <div class="perm-row-top">
+              <el-tag size="small" :type="r.value === 'admin' ? 'danger' : 'info'" effect="plain">{{ r.label }}</el-tag>
+              <span class="perm-count">{{ roleUserCount[r.value] ?? 0 }} 人</span>
+            </div>
+            <div class="perm-desc">{{ ROLE_DESC[r.value] }}</div>
           </div>
           <el-alert type="warning" :closable="false" style="margin-top: 10px">
             默认账号密码为初始化播种值，生产部署请立即重置。
@@ -210,6 +223,9 @@ const dialogTitle = computed(() => (mode.value === "create" ? "新建用户" : `
 .page-title { font-size: 13px; color: #909399; }
 .mono { font-family: Consolas, Monaco, monospace; }
 .perm-card { font-size: 12px; }
-.perm-row { margin-bottom: 10px; }
-.perm-row ul { margin: 6px 0 0; padding-left: 18px; color: #606266; line-height: 1.7; }
+.card-head { display: flex; align-items: center; justify-content: space-between; }
+.perm-row { margin-bottom: 12px; }
+.perm-row-top { display: flex; align-items: center; justify-content: space-between; }
+.perm-count { color: #909399; }
+.perm-desc { margin-top: 4px; color: #606266; line-height: 1.6; }
 </style>

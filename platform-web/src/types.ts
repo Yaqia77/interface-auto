@@ -298,3 +298,30 @@ export interface AuditLogsResp {
   returned: number;
   items: AuditItem[];
 }
+
+/** 角色权限矩阵（/api/auth/permissions，设计文档 8.2） */
+export interface PermRoleOption {
+  value: string;
+  label: string;
+}
+
+export interface PermCatalogItem {
+  code: string;
+  name: string;
+  desc: string;
+  roles: string[];
+}
+
+export interface PermMatrixResp {
+  roles: PermRoleOption[];
+  catalog: PermCatalogItem[];
+  matrix: Record<string, string[]>;
+  defaults: Record<string, string[]>;
+  rules: { locked_role: Record<string, string>; must_nonempty: string[] };
+}
+
+export interface PermSaveResp {
+  matrix: Record<string, string[]>;
+  changed: string[];
+  actor_permissions: string[];
+}

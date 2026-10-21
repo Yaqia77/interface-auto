@@ -72,6 +72,7 @@ function onUserCommand(cmd: string) {
         </el-menu-item-group>
         <el-menu-item-group title="系统管理">
           <el-menu-item v-perm="'user:manage'" index="/users">👥 用户管理</el-menu-item>
+          <el-menu-item v-perm="'user:manage'" index="/roles">🛡️ 角色权限</el-menu-item>
           <el-menu-item v-perm="'audit:view'" index="/audit">📜 操作审计</el-menu-item>
         </el-menu-item-group>
       </el-menu>

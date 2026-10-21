@@ -1,7 +1,8 @@
-"""认证与鉴权（RBAC 骨架，对应设计文档第二章角色权限矩阵）。
+"""认证与鉴权（RBAC，对应设计文档第二章角色权限矩阵）。
 
 - Token：登录成功后签发随机串，内存登记表维护（服务重启需重新登录，MVP 可接受）。
-- 权限：角色 -> 权限码集合；接口用 Depends(require_perm("xxx")) 做后端二次校验，
+- 权限：角色 -> 权限码集合，矩阵存 data/permissions.json（「角色权限」页可改，热加载）；
+  接口用 Depends(require_perm("xxx")) 做后端二次校验，
   前端 v-perm 只做按钮显隐，安全边界始终在后端。
 """
 import secrets
@@ -10,23 +11,10 @@ from typing import Callable
 
 from fastapi import Depends, HTTPException, Request
 
-# 权限码目录（粒度对齐设计文档「菜单级→按钮级→数据级」中的按钮/操作级）
-PERMISSIONS = {
-    "case:write":     {"admin", "tl", "qa"},              # 用例新增/编辑/导入
-    "case:delete":    {"admin", "tl"},                    # 用例删除（设计文档：删除需 TL+）
-    "secret:manage":  {"admin", "tl"},                    # 凭证增删改
-    "env:manage":     {"admin", "tl"},                    # 环境配置写回
-    "run:create":     {"admin", "tl", "qa", "dev"},       # 触发执行（Viewer 不可）
-    "plan:manage":    {"admin", "tl", "qa"},              # 测试场景 CRUD
-    "schedule:manage": {"admin", "tl"},                   # 定时任务
-    "webhook:manage": {"admin", "tl"},                    # 通知配置
-    "report:delete":  {"admin", "tl"},                    # 报告删除/清理
-    "user:manage":    {"admin"},                          # 用户管理（系统管理）
-    "audit:view":     {"admin", "tl"},                    # 操作审计查询/导出（TL 系统管理只读）
-    "audit:manage":   {"admin"},                          # 审计日志清理
-}
+from backend import perm_store
 
-# 只读角色兜底：viewer/dev 不持有任何写权限码，天然仅 GET
+# 权限矩阵已外置到 data/permissions.json（设计文档 8.2）；
+# 代码里的 perm_store.DEFAULT_MATRIX 仅作首次基线与「恢复默认」来源。
 
 # token -> username（内存态；服务重启即失效）
 _TOKENS: dict[str, str] = {}
@@ -51,7 +39,8 @@ def username_of(token: str) -> str | None:
 
 
 def permissions_of(role: str) -> list[str]:
-    return sorted(code for code, roles in PERMISSIONS.items() if role in roles)
+    """角色 → 权限码；每次实时读矩阵，故权限变更保存后立即对所有会话生效。"""
+    return perm_store.permissions_of(role)
 
 
 def extract_token(request: Request) -> str:

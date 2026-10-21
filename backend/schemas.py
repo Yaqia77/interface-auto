@@ -277,3 +277,14 @@ class UserUpdate(BaseModel):
     role: str | None = None
     enabled: bool | None = None
     password: str | None = None
+
+
+class PermMatrixUpdate(BaseModel):
+    """整体提交「权限码 → 角色」矩阵（设计文档 8.2）。
+
+    权限码目录由后端 perm_store.CATALOG 固定，不接受新增码，防止前端 v-perm 失效。
+    """
+
+    matrix: dict[str, list[str]] = Field(
+        description='权限码 -> 角色列表，如 {"case:write": ["admin","tl","qa"], "user:manage": ["admin"]}',
+    )
