@@ -15,7 +15,7 @@ from loguru import logger
 
 from backend import audit_store, authz, config_writer, scheduler, user_store
 from backend.routers import (api_defs, audit, auth, cases, dependencies, notifications,
-                             plans, runs, schedules, scripts, secrets)
+                             plans, projects, runs, schedules, scripts, secrets)
 from backend.schemas import EnvsUpdate, HealthOut
 from core.context import load_config
 
@@ -42,6 +42,7 @@ app.include_router(cases.router)
 app.include_router(dependencies.router)
 app.include_router(notifications.router)
 app.include_router(plans.router)
+app.include_router(projects.router)
 app.include_router(runs.router)
 app.include_router(schedules.router)
 app.include_router(scripts.router)

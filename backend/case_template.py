@@ -142,3 +142,60 @@ def build_template_bytes() -> BytesIO:
     wb.save(buf)
     buf.seek(0)
     return buf
+
+
+def build_empty_project_bytes() -> BytesIO:
+    """生成「空项目」用例文件：只写表头，不写示例/演示用例行。
+
+    供平台「新建项目」脚手架 data/cases/<id>.xlsx：新建后列表为空（靠 loader 的
+    allow_empty 读到空），用户直接「新增用例」或「智能导入」往里填；结构与下载模板一致，
+    写入时 excel_writer 能直接识别表头。
+    """
+    wb = Workbook()
+
+    # ---- Sheet1: 用例（仅表头，无示例行）----
+    ws = wb.active
+    ws.title = "用例"
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    for col, header in enumerate(_HEADERS, start=1):
+        cell = ws.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = Font(bold=True, color="FFC7CE" if header in _REQUIRED else "FFFFFF")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        note = _HEADER_NOTE.get(header)
+        if note:
+            cell.comment = Comment(note, "interface-auto")
+    widths = [16, 14, 14, 34, 10, 10, 12, 40, 30, 18, 40, 26, 46, 10, 20, 20]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    # ---- Sheet2: 全局变量（仅表头）----
+    ws2 = wb.create_sheet("全局变量")
+    white_bold = Font(bold=True, color="FFFFFF")
+    for col, header in enumerate(["变量名", "值", "备注"], start=1):
+        cell = ws2.cell(row=1, column=col, value=header)
+        cell.fill = header_fill
+        cell.font = white_bold
+    ws2.column_dimensions["A"].width = 18
+    ws2.column_dimensions["B"].width = 26
+    ws2.column_dimensions["C"].width = 40
+    ws2.freeze_panes = "A2"
+
+    # ---- Sheet3: 填写说明 ----
+    ws3 = wb.create_sheet("填写说明")
+    ws3.cell(row=1, column=1, value="接口用例 · 填写说明").font = Font(bold=True, size=12)
+    wrap = Alignment(vertical="center", wrap_text=True)
+    row = 3
+    for key, note in _GUIDE:
+        ws3.cell(row=row, column=1, value=key).alignment = Alignment(vertical="top")
+        c = ws3.cell(row=row, column=2, value=note)
+        c.alignment = wrap
+        row += 1
+    ws3.column_dimensions["A"].width = 6
+    ws3.column_dimensions["B"].width = 100
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf

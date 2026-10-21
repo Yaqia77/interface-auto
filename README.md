@@ -1,21 +1,28 @@
-# interface-auto 接口自动化测试框架
+# interface-auto 接口自动化测试平台
 
-Excel 驱动的接口自动化测试程序：用例写在 Excel 中，程序读取执行并生成测试报告。
-初版（v1）以命令行方式运行，页面版（v2）规划中。
+Excel 驱动的接口自动化测试平台：用例写在 Excel 中，程序读取执行并生成测试报告。
+既支持命令行（v1）单机运行，也提供 Web 平台（v2，FastAPI + Vue3）：在线维护用例/接口/脚本、
+触发执行、查看历史报告、定时调度、登录与角色权限、操作审计、统计报表。数据均以 Excel/JSON 文件存储，无需数据库。
 
 ## 技术栈
 
-Python 3.10+ · requests · openpyxl · pytest · jsonpath-ng · pytest-html / allure-pytest · PyYAML · loguru
+- **核心引擎**：Python 3.10+ · requests · openpyxl · pytest · jsonpath-ng · pytest-html / allure-pytest · PyYAML · loguru
+- **平台后端**：FastAPI · uvicorn · python-multipart（文件上传） · croniter（定时任务 Cron 解析）；内存 token 会话 + RBAC，PBKDF2 密码哈希，数据全部落 JSON/Excel 文件
+- **平台前端**：Vue 3 · Element Plus · Vite · TypeScript · vue-router（HTML5 history），`platform-web/` 独立子项目
 
 ## 目录结构
 
 ```
 interface-auto/
 ├── config/config.yaml        # 环境配置（域名/超时/默认请求头/报告开关）
-├── data/api_cases.xlsx       # 接口用例 Excel（用例/全局变量/填写说明 3 个 Sheet）
+├── data/api_cases.xlsx       # 接口用例 Excel（用例/全局变量/填写说明 3 个 Sheet；即平台「默认项目」）
+├── data/cases/               # 平台新建的业务项目用例文件（每个项目一个 .xlsx，按需生成）
+├── data/projects.json        # 用例项目注册表（平台「用例管理」页维护，已 gitignore）
 ├── data/scripts.json         # 公共脚本库（平台「公共脚本」页维护，已 gitignore）
 ├── data/api_defs.json        # 接口定义库（平台「接口定义」页维护，已 gitignore）
-├── core/                     # 核心引擎（纯逻辑，v2 页面版可直接复用）
+├── data/dependencies.json    # 用例依赖关系（平台「依赖管理」页维护，已 gitignore）
+├── data/users.json           # 用户账号（PBKDF2 哈希，已 gitignore）
+├── core/                     # 核心引擎（纯逻辑，CLI 与 Web 平台共用）
 │   ├── excel_loader.py       # Excel 解析 + 格式校验（报错精确定位到行列）
 │   ├── context.py            # 变量池（提取值 > 全局变量表 > YAML 配置）
 │   ├── variable.py           # {{变量}} 占位符替换引擎
@@ -25,8 +32,41 @@ interface-auto/
 │   ├── scripts.py            # 公共脚本引擎（声明式步骤链的定义/校验/执行）
 │   ├── models.py             # 数据模型
 │   └── runner.py             # 单用例执行编排（含前后置脚本钩子）
-├── tests/                    # pytest 参数化入口（保持 Excel 行顺序，保证接口依赖）
-├── tools/gen_template.py     # 生成/重置 Excel 用例模板
+├── tests/                    # pytest 参数化入口（保持 Excel 行顺序 + 依赖拓扑排序与阻塞）
+│   └── conftest.py           # 依赖展开（传递闭包）+ 拓扑排序 + 依赖失败阻塞不发请求
+├── backend/                  # 平台后端（FastAPI，仅文件存储，无数据库）
+│   ├── main.py               # 应用入口 + 全局鉴权中间件 + 审计中间件
+│   ├── authz.py              # token 会话（滑动过期）+ RBAC + 登录失败限流
+│   ├── user_store.py         # 用户与密码哈希（PBKDF2-HMAC-SHA256 + 随机盐）
+│   ├── perm_store.py         # 权限矩阵（内置基线 + 自定义覆盖，mtime 热加载）
+│   ├── case_importer.py      # 智能导入（表头三级识别/缺项补默认/预期结果→断言）
+│   ├── case_template.py      # 导出用例模板（带填写说明与示例）+ 空项目脚手架
+│   ├── project_store.py      # 用例项目注册表（项目 = 一个 Excel 文件，默认项原地指向存量）
+│   ├── excel_writer.py       # 用例写入 Excel（保存/导入落盘）
+│   ├── api_def_store.py      # 接口定义库
+│   ├── openapi_import.py     # OpenAPI/Swagger 文档解析导入
+│   ├── script_store.py       # 公共脚本库
+│   ├── dependency_store.py   # 用例依赖关系库
+│   ├── plan_store.py         # 测试场景库
+│   ├── config_writer.py      # 环境配置读写
+│   ├── secrets_writer.py     # 敏感凭证文件读写
+│   ├── scheduler.py          # 定时任务调度器（croniter）
+│   ├── scheduler_store.py    # 定时任务存储
+│   ├── notifier.py           # 执行结果通知（Webhook）
+│   ├── notification_store.py # Webhook 配置库
+│   ├── allure_store.py       # 报告归档与脱敏（mask）
+│   ├── audit_store.py        # 操作审计（脱敏落盘 + 超量裁剪）
+│   ├── schemas.py            # Pydantic 请求/响应模型
+│   └── routers/              # 各业务接口（auth/projects/cases/api_defs/scripts/dependencies/plans/runs/schedules/secrets/notifications/audit）
+├── platform-web/             # 平台前端（Vue3 + Element Plus + Vite，npm 子项目）
+│   └── src/views/            # 17 个页面：登录/仪表盘/用例/接口定义/公共脚本/依赖/场景/执行/报告/环境/凭证/通知/定时/统计/审计/用户/角色
+├── tools/                    # 脚手架与冒烟脚本
+│   ├── gen_template.py       # 生成/重置 Excel 用例模板
+│   ├── gen_secret.py         # 生成敏感凭证模板
+│   ├── smoke_authz.py        # 权限全链路冒烟（含写接口越权试探）
+│   ├── smoke_full.py         # 全功能端到端冒烟（项目/用例/导入/依赖/定时/执行主链路）
+│   ├── smoke_scripts.py      # 公共脚本冒烟
+│   └── smoke_api_defs.py     # 接口定义冒烟
 ├── main.py                   # CLI 入口
 ├── reports/                  # 每次运行一个时间戳目录：report.html + allure-results/
 └── logs/                     # 运行日志（含完整请求/响应报文，保留最近 10 份）
@@ -206,6 +246,37 @@ CLI 侧同样生效：脚本库存 `data/scripts.json`（路径可在 config.yam
   「带入推荐配置」覆写抽屉表单（仍需点保存才写回 Excel）；接口库读不到时名称仍可自由输入，
   用例保存逻辑完全不依赖它
 
+### 用例编写提效（模板导出 / 智能导入 / 依赖编排）
+
+面向人工评审用例（一级模块/用例编号/优先级/预置条件/用例名称/操作步骤/预期结果…）到平台用例的转换，降低编写成本：
+
+- **导出模板**：「用例管理」页可下载标准用例 Excel 模板（含填写说明与示例行），团队按模板填好再导入
+- **智能导入（预览确认后落盘）**：上传格式不匹配的用例表，后端 `case_importer` 做三级表头识别
+  （标准列 → 归一化列名 → 同义词映射），自动把人工列转成平台用例字段：
+  - **缺项补默认**：未填的方法/优先级/是否执行等按默认值补齐（默认 `GET`、`P2`、执行）
+  - **预期结果→断言**：语义映射成断言规则（如“返回200”→`eq status_code 200`），并可从接口定义库带入推荐断言
+  - **先预览后写入**：`preview` 返回转换预览行（不落盘），人工核对无误后 `confirm` 才写 Excel，避免脏数据入库
+- **依赖编排**：需要前置用例（如先登录提 token 再访问鉴权接口）时，在「依赖管理」页登记用例间依赖；
+  执行时 `conftest` 自动展开依赖传递闭包并做**拓扑排序**，保证被依赖用例先跑；
+  **依赖失败/停用则阻塞下游**（下游用例登记为 skipped，**不发请求**，避免拿空变量打错接口）；
+  `--cases` 精确选择不补全依赖（只在已选用例内排序），避免计划外用例被带进执行
+
+### 多项目隔离（用例越堆越多如何区分）
+
+痛点：所有用例挤在一个 Excel、模块是文件内自由文本，多套被测系统共库后模块名跨项目互相污染、无法区分。
+平台的解法是引入**项目维度**——**一个业务系统 = 一个 Excel 用例文件**：
+
+- 「用例管理」页左栏顶部是**项目切换器**，选定项目后右栏模块导航、用例列表、新增/编辑/导入导出
+  全部只作用于该项目的文件，**模块名不再跨项目串味**
+- 新建项目自动在 `data/cases/<id>.xlsx` 脚手架一张空表（仅表头），切换到它即可从零开始录入；
+  删除项目连同其文件一并清理（默认项目为内置项，不可删）
+- **默认项目原地指向存量 `data/api_cases.xlsx`**，不搬动文件，因此已有的定时任务/场景/执行历史引用**零影响**；
+  CLI 侧 `--file` 直接指向任意项目文件即可跑同一套用例
+- 权限不造新码：建/改项目复用 `case:write`，删除复用 `case:delete`；
+  项目的元数据存 `data/projects.json`（已 gitignore，用例内容仍存各自的 Excel）
+- 底层支撑：`excel_loader.load(allow_empty=True)` 让刚建好、还未录用例的空项目文件能被正常读到空列表而非报错
+  （仅平台读取链路用，执行链路 `conftest/main` 仍保持零用例视为异常）
+
 ## 运行参数
 
 ```bash
@@ -280,6 +351,8 @@ cd platform-web ; npm run dev
 .venv\Scripts\python.exe tools\smoke_scripts.py
 # 接口定义冒烟（校验同源 + Excel 聚合 + OpenAPI 导入 + 引用保护 + 用例骨架）
 .venv\Scripts\python.exe tools\smoke_api_defs.py
+# 全功能端到端冒烟（项目 CRUD/用例 CRUD/智能导入/依赖/Cron+定时/执行与报告删除，零外部依赖）
+.venv\Scripts\python.exe tools\smoke_full.py
 ```
 
 角色与权限矩阵（默认基线写在 `backend/perm_store.py`，可在「系统管理 → 角色权限」页勾选调整，自定义分配存 `data/permissions.json`）：
@@ -326,14 +399,30 @@ cd platform-web ; npm run dev
 - 接口定义页（「测试管理 → 接口定义」，库写操作需 `api:manage`）：列表按模块分组并显示每个接口的
   用例覆盖数，支持手工新建 / 从存量 Excel 聚合 / 粘贴 OpenAPI 文档导入；「生成用例骨架」先预览再落盘
   （需 `case:write`）。设计文档缺口 2.2 的完整说明见上方「接口定义管理」一节
+- 登录与会话安全：token 采用**滑动过期**（默认空闲 8 小时失效，每次鉴权自动续期，服务重启后失效）；
+  登录失败按 `(用户名|IP)` 限流（窗口内连续 5 次凭据错误锁定 15 分钟返回 429，成功登录清零，停用账号不计入）；
+  密码以 PBKDF2-HMAC-SHA256 加盐哈希保存并用 `hmac.compare_digest` 防时序攻击；内网共享工位场景下重点限制“登录不掉线、暴力试密码”
+- 定时任务页：执行频率以**可视化构建器**配置（每小时/每天/每周/每月 频率选 + 时间选择框 + 星期/日期选择），
+  同时保留 Cron 表达式手动输入框（无法归类的范围/步进表达式自动降为自定义、保持原值不被覆盖），并配「预览未来 N 次执行时间」；
+  自定义配置的环境/模块/优先级均为**下拉选择**（环境只能先在「环境配置」新增，模块/优先级取用例元数据），不再手填
+- 统计报表页：跨运行的通过率/趋势与模块分布汇总（浅色统一风格），数据源于已归档的报告批次
+- 用例项目维度：「用例管理」页以**项目切换器**隔离不同被测系统（项目 = 一个 Excel 文件，详见上方「多项目隔离」）；
+  左栏顶部切换项目、就地新建/重命名/删除（需 `case:write`/`case:delete`），选定后模块导航与用例读写仅作用于该项目文件
 
 ## 路线图
 
 - [x] v1：Excel 驱动 + CLI 运行 + 双报告（HTML / Allure）
-- [ ] v1.1：CI 集成（Jenkinsfile / GitHub Actions）、失败通知（钉钉/企微/邮件）
-- [ ] v2：页面版（FastAPI + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
+- [x] v2：页面版（FastAPI + Vue3 + Element Plus，在线编辑用例、触发执行、历史报告）
   - [x] v2 骨架：用例/场景/执行/报告/环境/凭证/通知/定时任务 + 登录与 RBAC 权限
   - [x] v2 审计：写操作与登录尝试留痕、脱敏落盘、筛选查询与 CSV 导出、超量自动裁剪
   - [x] v2 权限：角色权限矩阵可视化编辑（勾选即改，热生效 + 防锁死护栏 + 变更落审计）
   - [x] v2 脚本：前后置公共脚本（声明式步骤链 + Excel 引用列 + 引用保护 + 报告脚本轨迹）
   - [x] v2 接口：接口定义管理（接口库沉淀 + OpenAPI 导入 + 由接口生成用例骨架）
+  - [x] v2 提效：用例模板导出 + 智能导入（表头识别/缺项补默认/预期结果→断言，预览确认后落盘）
+  - [x] v2 依赖：用例依赖编排（依赖展开 + 拓扑排序 + 依赖失败阻塞不发请求）
+  - [x] v2 统计：统计报表（通过率/趋势/模块分布）
+  - [x] v2 安全：token 滑动过期 + 登录失败限流 + 登录页优化（密码错误可见提示）
+  - [x] v2 定时：定时任务可视化 Cron 构建器 + 环境/模块/优先级下拉选择
+  - [x] v2 项目：用例项目维度（一个业务系统一个 Excel + 项目切换器，模块按项目隔离）
+  - [x] v2 冒烟：全功能端到端冒烟脚本（smoke_full.py，项目/用例/导入/依赖/定时/执行主链路）
+- [ ] v1.1：CI 集成（Jenkinsfile / GitHub Actions）、失败通知模板扩充

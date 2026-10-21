@@ -79,6 +79,9 @@ def _serialize(field: str, value):
         return json.dumps(value, ensure_ascii=False)
     if field in _AUTO_HEADER_FIELDS:
         # 前置/后置脚本：列表 → 逗号分隔单元格文本（与 excel_loader.split_refs 无损往返）
+        # None / 空列表 = 不引用任何脚本（脚手架新建项目带这两列，用例未配脚本时须容忍空，否则整条被拒）
+        if value is None:
+            return None
         if not isinstance(value, list):
             raise CaseWriteError("invalid",
                                  f"{FIELD_TO_HEADER[field]} 必须是脚本名数组，如 [\"登录取token\"]")
@@ -241,9 +244,10 @@ def _save_validated(wb, file_path: Path) -> None:
         _safe_remove(tmp)
         raise CaseWriteError("invalid", f"写入临时文件失败: {e!r}")
 
-    # 用框架自身的 loader 全量校验临时文件，通过才原子替换原文件
+    # 用框架自身的 loader 全量校验临时文件（仅校结构）：allow_empty=True 使“删到只剩表头”也算合法，
+    # 避免新建空项目/删完最后一个用例时被“零用例”错误拒绝落盘；通过才原子替换原文件
     try:
-        excel_loader.load(tmp)
+        excel_loader.load(tmp, allow_empty=True)
     except ExcelFormatError as e:
         _safe_remove(tmp)
         # 报错定位透出的是临时文件名，映射回原始文件名再给前端

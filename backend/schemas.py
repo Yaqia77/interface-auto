@@ -79,6 +79,40 @@ class CaseBatchCreate(BaseModel):
     cases: list[CaseCreate] = Field(description="预览确认后的用例列表")
 
 
+class CaseMove(BaseModel):
+    """迁移用例到另一个项目（目标文件）：目标查重 → 写入目标 → 源删除。"""
+
+    to_file: str = Field(description="目标项目的用例 Excel 路径（相对项目根）")
+    new_module: str | None = Field(default=None, description="迁移后归入的模块名（留空=保留原模块）")
+
+
+class ProjectCreate(BaseModel):
+    """新建用例项目（一个业务系统一个 Excel 用例文件）。"""
+
+    name: str = Field(description="项目名称（唯一，不含 / \\ ? #）")
+    desc: str = Field(default="", description="项目描述（可选）")
+
+
+class ProjectUpdate(BaseModel):
+    """更新项目元信息（仅名称/描述，文件路径不可变）。"""
+
+    name: str | None = None
+    desc: str | None = None
+
+
+class ProjectOut(BaseModel):
+    """项目对外视图。"""
+
+    id: str
+    name: str
+    desc: str = ""
+    file: str = Field(description="相对项目根的用例 Excel 路径（前端据此贯穿 file 参数）")
+    builtin: bool = Field(default=False, description="内置默认项目不可删除")
+    created_at: str | None = None
+    updated_at: str | None = None
+    case_count: int = 0
+
+
 class RunCreate(BaseModel):
     """发起一次执行批次。"""
 

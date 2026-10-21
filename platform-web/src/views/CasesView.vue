@@ -1,10 +1,11 @@
 <script setup lang="ts">
-/** 用例管理：筛选 + 表格 + 行展开 + 编辑/新增抽屉（候选来自 /api/cases/meta，改动直写回存量 Excel）。 */
+/** 用例管理：项目切换 + 模块导航 + 筛选 + 编辑/新增抽屉（候选来自 /api/cases/meta?file=，改动直写回该项目 Excel）。 */
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, ScriptItem } from "../types";
+import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, Project, ScriptItem } from "../types";
+import JsonViewer from "../components/JsonViewer.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -20,8 +21,161 @@ const filters = reactive({
   onlyEnabled: true,
 });
 
+/* ================= 用例项目（项目 = 一个 Excel 文件，模块/用例按项目天然隔离） ================= */
+const PROJ_KEY = "ia_project";   // 会话级记住当前项目（与登录态 ia_token 同一 localStorage 惯例）
+const projects = ref<Project[]>([]);
+const activeProjectId = ref(localStorage.getItem(PROJ_KEY) || "default");
+
+/** 当前项目实体（列表尚未加载到时兜底为默认项目） */
+const currentProject = computed(() =>
+  projects.value.find((p) => p.id === activeProjectId.value) ??
+  projects.value.find((p) => p.id === "default") ?? null
+);
+
+/** 所有用例接口都要透传的 file 参数；兜底默认项目的存量文件路径 */
+const currentFile = computed(() => currentProject.value?.file ?? "data/api_cases.xlsx");
+
+async function loadProjects() {
+  try { projects.value = await api.listProjects(); } catch { /* 拦截器已提示 */ }
+  // 记住的项目可能已被删除/无权访问，兜底回默认项目，避免切换器空选
+  if (projects.value.length && !projects.value.some((p) => p.id === activeProjectId.value)) {
+    activeProjectId.value = "default";
+  }
+}
+
+function projectLabel(p: Project) {
+  return `${p.name}（${p.case_count} 条）`;
+}
+
+/* ---------- 项目管理：新建 / 重命名·说明 / 删除（builtin 默认项目禁删） ---------- */
+const projDlgVisible = ref(false);
+const projSaving = ref(false);
+const projForm = reactive({ name: "", desc: "" });
+const projEditingId = ref("");   // "" = 新建；否则为待更新项目 id
+
+function openProjCreate() {
+  projEditingId.value = "";
+  projForm.name = "";
+  projForm.desc = "";
+  projDlgVisible.value = true;
+}
+
+function openProjEdit() {
+  const p = currentProject.value;
+  if (!p) return;
+  projEditingId.value = p.id;
+  projForm.name = p.name;
+  projForm.desc = p.desc ?? "";
+  projDlgVisible.value = true;
+}
+
+async function saveProj() {
+  const name = projForm.name.trim();
+  if (!name) { ElMessage.error("项目名称不能为空"); return; }
+  projSaving.value = true;
+  try {
+    if (projEditingId.value) {
+      await api.updateProject(projEditingId.value, { name, desc: projForm.desc.trim() });
+      ElMessage.success("项目已更新");
+    } else {
+      const item = await api.createProject({ name, desc: projForm.desc.trim() });
+      ElMessage.success(`项目「${item.name}」已创建，可切换过去新建用例`);
+    }
+    projDlgVisible.value = false;
+    await loadProjects();
+  } catch { /* 拦截器已提示（重名 409 / 名称非法 400） */ } finally {
+    projSaving.value = false;
+  }
+}
+
+async function removeProject() {
+  const p = currentProject.value;
+  if (!p || p.builtin) return;
+  try {
+    await ElMessageBox.confirm(
+      `将删除项目「${p.name}」及其用例文件 ${p.file}（共 ${p.case_count} 条用例，不可恢复）。请先在执行中心确认无定时任务引用该文件。`,
+      "删除项目",
+      { type: "warning", confirmButtonText: "确认删除", cancelButtonText: "取消" },
+    );
+  } catch { return; }
+  try {
+    await api.deleteProject(p.id);
+    ElMessage.success(`项目「${p.name}」已删除`);
+    activeProjectId.value = "default";
+    await loadProjects();
+  } catch { /* 拦截器已提示 */ }
+}
+
+/* ---------- 用例迁移（批量）：勾选用例 → 点顶部"迁移" → 选目标项目 → 串行逐条迁移 ---------- */
+const moveVisible = ref(false);
+const moveSaving = ref(false);
+const moveForm = reactive({ toProjectId: "", new_module: "" });
+const moveTargetModules = ref<string[]>([]);   // 目标项目的模块候选
+const moveProjects = computed(() => projects.value.filter((p) => p.id !== activeProjectId.value));
+
+function openMove() {
+  if (!selected.value.length) { ElMessage.warning("请先勾选要迁移的用例"); return; }
+  moveForm.toProjectId = "";
+  moveForm.new_module = "";
+  moveTargetModules.value = [];
+  moveVisible.value = true;
+}
+
+/** 选定目标项目后拉其模块作为候选（迁移时可顺手归入目标项目的某个模块） */
+async function onMoveTargetChange() {
+  moveForm.new_module = "";
+  moveTargetModules.value = [];
+  const p = projects.value.find((x) => x.id === moveForm.toProjectId);
+  if (!p) return;
+  try {
+    moveTargetModules.value = (await api.getCaseMeta(p.file)).modules;
+  } catch { /* 拿不到候选不阻断，仍可自由输入模块名 */ }
+}
+
+async function doMove() {
+  const targets = selected.value;
+  if (!targets.length) return;
+  const target = projects.value.find((p) => p.id === moveForm.toProjectId);
+  if (!target) { ElMessage.warning("请选择目标项目"); return; }
+  moveSaving.value = true;
+  let ok = 0;
+  const failed: string[] = [];
+  for (const c of targets) {
+    try {
+      await api.moveCase(
+        c.case_id,
+        { to_file: target.file, new_module: moveForm.new_module.trim() || undefined },
+        currentFile.value,
+      );
+      ok++;
+    } catch {
+      failed.push(c.case_id);  // 拦截器已逐条提示
+    }
+  }
+  moveSaving.value = false;
+  if (failed.length) {
+    ElMessage.warning(`已迁移 ${ok} 条到「${target.name}」，失败 ${failed.length} 条（${failed.join(", ")}）`);
+  } else {
+    ElMessage.success(`已迁移 ${ok} 条用例到「${target.name}」`);
+  }
+  moveVisible.value = false;
+  clearSelection();
+  await loadProjects();
+  await search();
+  try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ }
+}
+
+// 切换项目：持久化选择、重置模块导航并重新拉取该项目的用例与元数据
+watch(activeProjectId, (v) => {
+  localStorage.setItem(PROJ_KEY, v);
+  activeModule.value = "";
+  currentPage.value = 1;
+  search();
+  api.getCaseMeta(currentFile.value).then((m) => (meta.value = m)).catch(() => { /* 拦截器已提示 */ });
+});
+
 /* ================= 模块导航 + 整体分页（左侧选模块，右侧分页表格） ================= */
-const activeModule = ref("");      // "" = 全部用例
+const activeModule = ref("","");      // "" = 全部用例
 const pageSize = ref(10);
 const currentPage = ref(1);
 
@@ -59,6 +213,7 @@ async function search() {
       priority: filters.priority.length ? filters.priority.join(",") : undefined,
       keyword: filters.keyword || undefined,
       run: filters.onlyEnabled ? true : undefined,
+      file: currentFile.value,
     });
     cases.value = resp.items;
     total.value = resp.items.length;
@@ -97,6 +252,7 @@ function goExecute() {
       module: activeModule.value || undefined,
       priority: filters.priority.length ? filters.priority.join(",") : undefined,
       keyword: filters.keyword || undefined,
+      file: currentFile.value,
     },
   });
 }
@@ -106,8 +262,6 @@ const prioType = (p: string) =>
 
 /** 接口定义来源说明（与 /api/defs 后端 SOURCE_LABELS 同口径） */
 const SOURCE_LABEL: Record<string, string> = { manual: "手工录入", excel: "Excel 聚合", openapi: "OpenAPI 导入" };
-
-const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 
 /* ================= 编辑抽屉 ================= */
 
@@ -297,6 +451,7 @@ async function doExport() {
       priority: filters.priority.length ? filters.priority.join(",") : undefined,
       keyword: filters.keyword || undefined,
       run: filters.onlyEnabled ? true : undefined,
+      file: currentFile.value,
     });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -318,7 +473,7 @@ async function onFileSelected(e: Event) {
   if (!file) return;
   input.value = "";
   try {
-    const result = await api.importCases(file);
+    const result = await api.importCases(file, currentFile.value);
     const { imported, skipped, errors } = result;
     if (errors.length) {
       ElMessage.warning(`导入 ${imported} 条，跳过 ${skipped} 条已有，${errors.length} 条格式异常`);
@@ -326,7 +481,8 @@ async function onFileSelected(e: Event) {
       ElMessage.success(`导入 ${imported} 条，跳过 ${skipped} 条已有`);
     }
     await search();
-    meta.value = await api.getCaseMeta();
+    meta.value = await api.getCaseMeta(currentFile.value);
+    loadProjects();   // 项目列表上的用例数同步
   } catch { /* 拦截器已提示 */ }
 }
 
@@ -380,7 +536,7 @@ async function onSmartFile(e: Event) {
   smartData.value = null;
   smartSelected.value = [];
   try {
-    const resp = await api.smartImportPreview(file);
+    const resp = await api.smartImportPreview(file, currentFile.value);
     smartData.value = resp;
     await nextTick();
     // 默认勾选：可导入且编号不与存量冲突
@@ -411,7 +567,7 @@ async function doSmartImport() {
   }
   smartSaving.value = true;
   try {
-    const { imported, skipped, errors } = await api.smartImportConfirm(smartSelected.value.map((x) => x.case));
+    const { imported, skipped, errors } = await api.smartImportConfirm(smartSelected.value.map((x) => x.case), currentFile.value);
     if (errors.length) {
       ElMessage.warning(`导入 ${imported} 条，跳过 ${skipped} 条已有，${errors.length} 条异常（${errors[0]}）`);
     } else {
@@ -419,7 +575,8 @@ async function doSmartImport() {
     }
     smartVisible.value = false;
     await search();
-    meta.value = await api.getCaseMeta();
+    meta.value = await api.getCaseMeta(currentFile.value);
+    loadProjects();
   } catch { /* 拦截器已提示 */ } finally {
     smartSaving.value = false;
   }
@@ -437,7 +594,7 @@ async function batchRun(val: boolean) {
   const failed: string[] = [];
   for (const c of targets) {
     try {
-      await api.updateCase(c.case_id, { run: val });
+      await api.updateCase(c.case_id, { run: val }, currentFile.value);
       ok++;
     } catch {
       failed.push(c.case_id);  // 拦截器已逐条提示后端 detail
@@ -692,17 +849,18 @@ async function saveEdit() {
     if (mode.value === "create") {
       const data = collectAll();
       if (!data) return;
-      await api.createCase(data);
-      ElMessage.success(`已新增并写回 Excel：${data.case_id}`);
+      await api.createCase(data, currentFile.value);
+      ElMessage.success(`已新增并写回 ${currentProject.value?.name ?? "当前项目"}：${data.case_id}`);
     } else {
       const changes = buildChanges();
       if (!changes || !editing.value) return;
-      await api.updateCase(editing.value.case_id, changes);
+      await api.updateCase(editing.value.case_id, changes, currentFile.value);
       ElMessage.success(`已写回 Excel：${Object.keys(changes).join(", ")}`);
     }
     editVisible.value = false;
     await search();
-    meta.value = await api.getCaseMeta();  // 模块/请求头候选可能因本次改动而新增
+    meta.value = await api.getCaseMeta(currentFile.value);  // 模块/请求头候选可能因本次改动而新增
+    loadProjects();   // 项目用例数随增删变化
   } catch {
     /* 拦截器已提示后端 detail（400 逐行定位 / 409 占用、重号与行锁） */
   } finally {
@@ -712,10 +870,11 @@ async function saveEdit() {
 
 async function removeCase(row: CaseItem) {
   try {
-    await api.deleteCase(row.case_id);
+    await api.deleteCase(row.case_id, currentFile.value);
     ElMessage.success(`已删除并写回 ${row.source}：${row.case_id}`);
     await search();
-    meta.value = await api.getCaseMeta();
+    meta.value = await api.getCaseMeta(currentFile.value);
+    loadProjects();
   } catch { /* 拦截器已提示 */ }
 }
 
@@ -753,7 +912,7 @@ const histTrend = computed(() => {
   return "";
 });
 function histRerun() {
-  if (histRow.value) router.push({ path: "/execution", query: { keyword: histRow.value.case_id } });
+  if (histRow.value) router.push({ path: "/execution", query: { keyword: histRow.value.case_id, file: currentFile.value } });
 }
 function histOpenRun(runId: string) {
   router.push({ path: "/report", query: { runId, caseId: histRow.value?.case_id } });
@@ -806,8 +965,9 @@ onMounted(async () => {
     if (q.keyword) parts.push(`关键字=${q.keyword}`);
     carried.value = parts.join("，");
   }
+  await loadProjects();   // 先确定当前项目，再按其文件拉用例
   search();
-  try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
+  try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ }
   loadScripts();
   loadApiDefs();
   await nextTick();
@@ -817,8 +977,23 @@ onMounted(async () => {
 
 <template>
   <div class="case-page">
-    <!-- 左侧：模块导航（相同模块的用例归到一起，点击即只看该模块） -->
+    <!-- 左侧：项目切换 + 模块导航（项目 = 一个 Excel 文件，模块仅在项目内分组，互不污染） -->
     <el-card shadow="never" class="mod-panel">
+      <div class="mod-panel-head">用例项目</div>
+      <el-select v-model="activeProjectId" style="width: 100%" :loading="!projects.length">
+        <el-option v-for="p in projects" :key="p.id" :value="p.id" :label="projectLabel(p)">
+          <span class="opt-key">{{ p.name }}{{ p.builtin ? " ⭐" : "" }}</span>
+          <span class="opt-val">{{ p.case_count }} 条</span>
+        </el-option>
+      </el-select>
+      <div class="proj-file mono" :title="currentFile">{{ currentFile }}</div>
+      <div v-if="currentProject?.desc" class="proj-desc" :title="currentProject.desc">{{ currentProject.desc }}</div>
+      <div class="proj-ops">
+        <el-button v-perm="'case:write'" link type="primary" size="small" @click="openProjCreate">＋ 新建</el-button>
+        <el-button v-if="currentProject" v-perm="'case:write'" link type="primary" size="small" @click="openProjEdit">重命名</el-button>
+        <el-button v-if="currentProject && !currentProject.builtin" v-perm="'case:delete'" link type="danger" size="small" @click="removeProject">删除</el-button>
+      </div>
+      <el-divider style="margin: 10px 0" />
       <div class="mod-panel-head">模块</div>
       <ul class="mod-list">
         <li :class="{ active: activeModule === '' }" @click="selectModule('')">
@@ -883,6 +1058,7 @@ onMounted(async () => {
             <span style="color: #606266; font-size: 13px">已选 {{ selected.length }} 条（跨页保留）</span>
             <el-button v-perm="'case:write'" size="small" type="success" plain :loading="batching" @click="batchRun(true)">批量启用</el-button>
             <el-button v-perm="'case:write'" size="small" type="info" plain :loading="batching" @click="batchRun(false)">批量停用</el-button>
+            <el-button v-perm="'case:write'" size="small" type="primary" plain @click="openMove">迁移</el-button>
             <el-button size="small" text @click="clearSelection">清空选择</el-button>
           </div>
         </div>
@@ -891,19 +1067,19 @@ onMounted(async () => {
             <template #default="{ row }">
               <el-descriptions :column="1" border size="small" style="padding: 8px 24px">
                 <el-descriptions-item label="Headers">
-                  <pre class="json">{{ fmt(row.headers) }}</pre>
+                  <JsonViewer :data="row.headers" :max-height="200" />
                 </el-descriptions-item>
                 <el-descriptions-item label="查询参数">
-                  <pre class="json">{{ fmt(row.params) }}</pre>
+                  <JsonViewer :data="row.params" :max-height="200" />
                 </el-descriptions-item>
                 <el-descriptions-item label="请求体">
-                  <pre class="json">{{ fmt(row.body) }}</pre>
+                  <JsonViewer :data="row.body" :max-height="200" />
                 </el-descriptions-item>
                 <el-descriptions-item label="变量提取">
-                  <pre class="json">{{ fmt(row.extract) }}</pre>
+                  <JsonViewer :data="row.extract" :max-height="200" />
                 </el-descriptions-item>
                 <el-descriptions-item label="断言">
-                  <pre class="json">{{ fmt(row.asserts) }}</pre>
+                  <JsonViewer :data="row.asserts" :max-height="200" />
                 </el-descriptions-item>
                 <el-descriptions-item label="公共脚本">
                   <span v-if="(row.pre_scripts ?? []).length || (row.post_scripts ?? []).length">
@@ -939,7 +1115,7 @@ onMounted(async () => {
               <el-tag :type="row.run ? 'success' : 'info'" size="small">{{ row.run ? "Y" : "N" }}</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="240" fixed="right">
+          <el-table-column label="操作" width="250" fixed="right">
             <template #default="{ row }">
               <div class="op-cell">
                 <el-button size="small" text type="primary" @click="openHistory(row)">历史</el-button>
@@ -967,7 +1143,7 @@ onMounted(async () => {
           @size-change="currentPage = 1"
         />
         <div style="margin-top: 10px; color: #909399; font-size: 13px">
-          共 {{ total }} 条 ｜ 数据源：data/api_cases.xlsx（Excel 仍是唯一用例载体，平台编辑直写回 Excel，校验不过不落盘）
+          共 {{ total }} 条 ｜ 当前项目：{{ currentProject?.name ?? "默认项目" }}（{{ currentFile }}）——Excel 仍是唯一用例载体，平台编辑直写回当前项目的 Excel，校验不过不落盘
         </div>
       </el-card>
     </div>
@@ -1130,7 +1306,7 @@ onMounted(async () => {
         </el-form-item>
 
         <div class="hint" style="margin: 14px 0 10px">
-          <template v-if="mode === 'create'">保存后追加为 data/api_cases.xlsx 末行{{ copyFrom ? "（复制自 " + copyFrom + "，作为全新用例）" : "" }}；后端跑全文件格式校验，不通过不落盘。</template>
+          <template v-if="mode === 'create'">保存后追加为项目「{{ currentProject?.name ?? currentFile }}」末行{{ copyFrom ? "（复制自 " + copyFrom + "，作为全新用例）" : "" }}；后端跑全文件格式校验，不通过不落盘。</template>
           <template v-else>保存后直写回 {{ editing?.source }} 第 {{ editing?.row }} 行；后端跑全文件格式校验，不通过不落盘。</template>
         </div>
         <el-button @click="editVisible = false">取消</el-button>
@@ -1259,6 +1435,60 @@ onMounted(async () => {
         <el-button type="primary" :loading="smartSaving" :disabled="!smartSelected.length" @click="doSmartImport">确认导入</el-button>
       </template>
     </el-dialog>
+
+    <!-- 项目新建 / 重命名弹窗（后端自动脚手架空用例文件，重名 409） -->
+    <el-dialog v-model="projDlgVisible" :title="projEditingId ? '编辑项目' : '新建用例项目'" width="440px">
+      <el-form label-width="72px" @submit.prevent>
+        <el-form-item label="名称">
+          <el-input v-model="projForm.name" maxlength="40" placeholder="被测系统名，如：订单中心" />
+        </el-form-item>
+        <el-form-item label="说明">
+          <el-input v-model="projForm.desc" type="textarea" :rows="2" placeholder="选填：项目用途、负责人等" />
+        </el-form-item>
+      </el-form>
+      <div class="hint" style="margin: 0">
+        <template v-if="projEditingId">项目文件路径不可变，重命名不影响定时任务/场景引用。</template>
+        <template v-else>新建会在 data/cases/ 下生成一张空用例表（仅表头），切换到该项目后即可新增/导入用例；不同项目的模块彼此隔离。</template>
+      </div>
+      <template #footer>
+        <el-button @click="projDlgVisible = false">取消</el-button>
+        <el-button type="primary" :loading="projSaving" @click="saveProj">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 用例迁移弹窗（批量）：勾选多条 → 选目标项目 → 串行逐条迁移（目标查重后写入并删源） -->
+    <el-dialog v-model="moveVisible" title="迁移用例到其他项目" width="480px">
+      <el-form label-width="82px" @submit.prevent>
+        <el-form-item label="迁移范围">
+          <span>已勾选 <b>{{ selected.length }}</b> 条用例</span>
+          <span class="dim" style="margin-left: 8px">{{ selected.slice(0, 3).map(c => c.case_id).join(", ") }}{{ selected.length > 3 ? ` 等 ${selected.length} 条` : "" }}</span>
+        </el-form-item>
+        <el-form-item label="源项目">
+          <span>{{ currentProject?.name ?? currentFile }}</span>
+        </el-form-item>
+        <el-form-item label="目标项目">
+          <el-select v-model="moveForm.toProjectId" style="width: 100%" placeholder="选择要迁入的项目" @change="onMoveTargetChange">
+            <el-option v-for="p in moveProjects" :key="p.id" :value="p.id" :label="p.name">
+              <span class="opt-key">{{ p.name }}{{ p.builtin ? " ⭐" : "" }}</span>
+              <span class="opt-val">{{ p.case_count }} 条</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="归入模块">
+          <el-select v-model="moveForm.new_module" filterable allow-create default-first-option clearable
+                     style="width: 100%" placeholder="留空=保留原模块；可选目标项目已有模块或输入新模块">
+            <el-option v-for="m in moveTargetModules" :key="m" :value="m" :label="m" />
+          </el-select>
+        </el-form-item>
+      </el-form>
+      <div class="hint" style="margin: 0">
+        迁移会先在目标项目查重并写入（目标已有同编号用例会被拒绝），再从源项目删除；失败条数会计入报告。建议一次不要勾选过多。
+      </div>
+      <template #footer>
+        <el-button @click="moveVisible = false">取消</el-button>
+        <el-button type="primary" :loading="moveSaving" @click="doMove">确认迁移 {{ selected.length }} 条</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -1275,13 +1505,17 @@ onMounted(async () => {
 .mod-panel { width: 200px; flex: 0 0 200px; }
 .mod-panel :deep(.el-card__body) { padding: 8px; }
 .mod-panel-head { font-weight: 600; font-size: 13px; color: #303133; padding: 4px 8px 8px; }
-.mod-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 180px); overflow: auto; }
+.mod-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 320px); overflow: auto; }
 .mod-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #606266; }
 .mod-list li:hover { background: #f0f2f5; }
 .mod-list li.active { background: #409eff; color: #fff; font-weight: 600; }
 .mod-list li.active .mod-cnt { background: rgba(255, 255, 255, 0.25); color: #fff; }
 .mod-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mod-cnt { flex: 0 0 auto; min-width: 22px; text-align: center; font-size: 12px; line-height: 18px; padding: 0 6px; border-radius: 9px; background: #ecf0f5; color: #909399; }
+/* 项目切换器 */
+.proj-file { margin-top: 6px; font-size: 11px; color: #a0a4a8; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-desc { margin-top: 4px; font-size: 12px; color: #909399; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.proj-ops { margin-top: 6px; display: flex; gap: 4px; }
 .case-body { flex: 1; min-width: 0; }
 .table-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .cur-mod { color: #606266; font-size: 13px; }

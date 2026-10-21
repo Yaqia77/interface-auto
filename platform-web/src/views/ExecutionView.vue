@@ -4,15 +4,41 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue"
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { EnvInfo, RunItem } from "../types";
+import type { EnvInfo, Project, RunItem } from "../types";
+
+/* 项目（= 一个 Excel 用例文件）：与用例管理共用 localStorage 的当前项目选择 */
+const PROJ_KEY = "ia_project";
+const projects = ref<Project[]>([]);
+const activeProjectId = ref(localStorage.getItem(PROJ_KEY) || "default");
+const currentProject = computed(() =>
+  projects.value.find((p) => p.id === activeProjectId.value) ??
+  projects.value.find((p) => p.id === "default") ?? null);
+const selectedFile = computed(() => currentProject.value?.file ?? "data/api_cases.xlsx");
 
 const form = reactive({
   env: "",
-  priority: "",
-  module: "",
   keyword: "",
-  file: "data/api_cases.xlsx",
 });
+// 筛选条件可选化：优先级多选、模块单选（候选均来自所选项目的用例元数据）
+const priorityList = ref<string[]>([]);
+const moduleSel = ref("");
+const metaModules = ref<string[]>([]);
+const metaPrios = ref<string[]>([]);
+
+async function loadProjects() {
+  try { projects.value = await api.listProjects(); } catch { /* 拦截器已提示 */ }
+  if (projects.value.length && !projects.value.some((p) => p.id === activeProjectId.value)) {
+    activeProjectId.value = "default";
+  }
+}
+
+async function loadMeta() {
+  try {
+    const m = await api.getCaseMeta(selectedFile.value);
+    metaModules.value = m.modules;
+    metaPrios.value = m.priorities;
+  } catch { metaModules.value = []; metaPrios.value = []; }
+}
 
 const envs = ref<EnvInfo[]>([]);
 const launching = ref(false);
@@ -25,10 +51,10 @@ const router = useRouter();
 const route = useRoute();
 const carried = ref("");   // 从用例管理携带过来的筛选条件描述（非空则顶部提示）
 
-/** 清除预填条件（仅清从用例管理带来的三个过滤项，不动环境/文件） */
+/** 清除预填条件（仅清从用例管理带来的三个过滤项，不动环境/项目） */
 function clearCarried() {
-  form.module = "";
-  form.priority = "";
+  moduleSel.value = "";
+  priorityList.value = [];
   form.keyword = "";
   carried.value = "";
   rangeMode.value = "filter";
@@ -48,7 +74,7 @@ async function loadTree() {
   if (treeData.value.length) return;      // 首次切到勾选模式才加载，后续复用
   treeLoading.value = true;
   try {
-    const resp = await api.listCases({ run: true });   // 仅列出已启用（run=Y）的用例
+    const resp = await api.listCases({ run: true, file: selectedFile.value });   // 仅列所选项目已启用（run=Y）的用例
     const byMod = new Map<string, TreeNode[]>();
     for (const c of resp.items) {
       const leaf: TreeNode = { id: c.case_id, label: `${c.case_id} · ${c.api_name}`, module: c.module, priority: c.priority };
@@ -79,6 +105,14 @@ function onCheck() {
 }
 watch(treeFilter, (v) => treeRef.value?.filter(v));
 watch(rangeMode, (m) => { if (m === "pick") loadTree(); });
+watch(activeProjectId, (v) => localStorage.setItem(PROJ_KEY, v));
+// 切换项目：刷新模块/优先级候选；勾选模式的用例树按新项目重建
+watch(selectedFile, () => {
+  loadMeta();
+  treeData.value = [];
+  checkedIds.value = [];
+  if (rangeMode.value === "pick") loadTree();
+});
 const pickedCount = computed(() => checkedIds.value.length);
 
 /* ================= 运行前变量覆盖 ================= */
@@ -104,7 +138,7 @@ async function loadRuns() {
 }
 
 async function start() {
-  const body: Parameters<typeof api.createRun>[0] = { env: form.env || undefined, file: form.file };
+  const body: Parameters<typeof api.createRun>[0] = { env: form.env || undefined, file: selectedFile.value };
   if (rangeMode.value === "pick") {
     const ids = collectIds();
     if (!ids.length) {
@@ -113,8 +147,8 @@ async function start() {
     }
     body.cases = ids;
   } else {
-    body.priority = form.priority || undefined;
-    body.module = form.module || undefined;
+    body.priority = priorityList.value.length ? priorityList.value.join(",") : undefined;
+    body.module = moduleSel.value || undefined;
     body.keyword = form.keyword || undefined;
   }
   const vars = buildVars();
@@ -206,11 +240,17 @@ function watchRun(run: RunItem) {
 
 onMounted(async () => {
   loadRuns();
-  // 从用例管理“按当前条件执行”跳转而来：预填模块/优先级/关键字
+  await loadProjects();   // 先确定项目，候选与执行文件才正确
   const q = route.query;
+  // 从用例管理/报告页携带 file：定位到对应项目
+  if (q.file) {
+    const p = projects.value.find((x) => x.file === (q.file as string));
+    if (p) activeProjectId.value = p.id;
+  }
+  // 预填模块/优先级/关键字
   if (q.module || q.priority || q.keyword) {
-    form.module = (q.module as string) || "";
-    form.priority = (q.priority as string) || "";
+    moduleSel.value = (q.module as string) || "";
+    priorityList.value = ((q.priority as string) || "").split(",").map((s) => s.trim()).filter(Boolean);
     form.keyword = (q.keyword as string) || "";
     const parts: string[] = [];
     if (q.module) parts.push(`模块=${q.module}`);
@@ -218,6 +258,7 @@ onMounted(async () => {
     if (q.keyword) parts.push(`关键字=${q.keyword}`);
     carried.value = parts.join("，");
   }
+  loadMeta();
   const resp = await api.listEnvs();
   envs.value = resp.envs;
   form.env = resp.default_env ?? "";
@@ -260,10 +301,14 @@ onBeforeUnmount(stopPolling);
 
             <template v-if="rangeMode === 'filter'">
               <el-form-item label="优先级">
-                <el-input v-model="form.priority" placeholder="如 P0 或 P0,P1（留空=全量）" />
+                <el-select v-model="priorityList" multiple collapse-tags placeholder="全部（留空=全量）" style="width: 100%">
+                  <el-option v-for="p in metaPrios" :key="p" :label="p" :value="p" />
+                </el-select>
               </el-form-item>
               <el-form-item label="模块">
-                <el-input v-model="form.module" placeholder="包含匹配，留空不筛选" />
+                <el-select v-model="moduleSel" filterable clearable placeholder="全部（留空=不筛选）" style="width: 100%">
+                  <el-option v-for="m in metaModules" :key="m" :label="m" :value="m" />
+                </el-select>
               </el-form-item>
               <el-form-item label="关键字">
                 <el-input v-model="form.keyword" placeholder="编号/接口名/描述/URL" />
@@ -286,11 +331,17 @@ onBeforeUnmount(stopPolling);
                 class="pick-tree"
                 @check="onCheck"
               />
-              <div class="pick-tip">勾选模式使用默认用例文件，仅列已启用（run=Y）用例；执行顺序按用例依赖（Excel 行序）。</div>
+              <div class="pick-tip">勾选模式使用当前所选项目，仅列已启用（run=Y）用例；执行顺序按用例依赖（Excel 行序）。</div>
             </div>
 
-            <el-form-item label="用例文件">
-              <el-input v-model="form.file" :disabled="rangeMode === 'pick'" />
+            <el-form-item label="用例项目">
+              <el-select v-model="activeProjectId" style="width: 100%">
+                <el-option v-for="p in projects" :key="p.id" :value="p.id" :label="p.name">
+                  <span class="opt-key">{{ p.name }}{{ p.builtin ? " ⭐" : "" }}</span>
+                  <span class="opt-val">{{ p.case_count }} 条</span>
+                </el-option>
+              </el-select>
+              <div class="pick-tip" style="margin-top: 4px; word-break: break-all">{{ selectedFile }}</div>
             </el-form-item>
 
             <el-collapse v-model="advOpen" class="vars-collapse">
@@ -428,4 +479,6 @@ onBeforeUnmount(stopPolling);
 .var-row { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
 .var-row .el-input { flex: 1; }
 .vars-hint { margin-top: 6px; font-size: 12px; color: #909399; line-height: 1.5; }
+.opt-key { float: left; }
+.opt-val { float: right; color: #a0a4a8; font-size: 12px; margin-left: 16px; }
 </style>

@@ -75,10 +75,12 @@ class LoadResult:
         self.variables = variables
 
 
-def load(path) -> LoadResult:
+def load(path, allow_empty: bool = False) -> LoadResult:
     """加载用例文件；path 可为单个 .xlsx 文件或目录（目录下所有 .xlsx 合并，按文件名排序）。
 
     目录扫描会排除 secret_vars 开头的凭证文件（由 load_secret_vars 按配置单独加载）。
+    allow_empty=True：表头合法但零条用例时返回空结果而不报错（平台读取空项目文件用）；
+    执行链路（conftest/main）保持默认 False，零用例仍视为异常。
     """
     p = Path(path)
     if p.is_dir():
@@ -97,7 +99,7 @@ def load(path) -> LoadResult:
     variables: dict = {}
     for f in files:
         _load_one(f, cases, variables)
-    if not cases:
+    if not cases and not allow_empty:
         raise ExcelFormatError(f"未从 {len(files)} 个文件中解析到任何用例")
     return LoadResult(cases, variables)
 

@@ -26,6 +26,19 @@ export interface CasePage {
   items: CaseItem[];
 }
 
+/** 用例项目（一个业务系统 = 一个 Excel 用例文件）：/api/projects */
+export interface Project {
+  id: string;
+  name: string;
+  desc: string;
+  /** 相对项目根的用例文件路径；前端据此把 file 贯穿所有用例接口 */
+  file: string;
+  builtin: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  case_count: number;
+}
+
 /** 智能导入：转换后的用例草稿（与 CaseCreate 请求体同构，字段可能缺省走默认值） */
 export interface ImportCaseDraft {
   case_id: string;

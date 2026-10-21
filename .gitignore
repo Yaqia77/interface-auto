@@ -43,6 +43,12 @@ data/scripts.json
 # 接口定义库（平台沉淀的接口元数据与断言建议；缺省为空库，不影响用例执行）
 data/api_defs.json
 
+# 用例项目注册表（平台「用例管理」页维护的项目→Excel 映射，不入库）
+data/projects.json
+
+# 平台新建业务项目的用例文件（每个项目一个 .xlsx，由用户在页面上录入，不入库）
+data/cases/
+
 # 操作审计留痕（含请求体摘要，可能触及敏感信息，不入库）
 data/audit_logs.jsonl
 

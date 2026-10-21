@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from backend import authz, excel_writer
 from backend import case_importer, case_template
 from backend.excel_writer import CaseWriteError
-from backend.schemas import CaseBatchCreate, CaseCreate, CaseOut, CasePage, CaseUpdate
+from backend.schemas import CaseBatchCreate, CaseCreate, CaseMove, CaseOut, CasePage, CaseUpdate
 from core import excel_loader, scripts as core_scripts
 from core.excel_loader import CASE_COLUMNS, ExcelFormatError
 from core.models import TestCase
@@ -31,7 +31,8 @@ def _load_cached(path: Path):
     hit = _cache.get(key)
     if hit and hit[0] == mtime:
         return hit[1]
-    result = excel_loader.load(path)
+    # allow_empty=True：刚建好、还未录入任何用例的项目文件应能正常读到空列表，而非 400
+    result = excel_loader.load(path, allow_empty=True)
     _cache[key] = (mtime, result)
     return result
 
@@ -398,3 +399,60 @@ def update_case(case_id: str, body: CaseUpdate, file: str = Query(default="data/
     if fresh is None:  # 理论不可达：写回前后都过了 loader 校验
         raise HTTPException(status_code=500, detail="写回后未能重新读到用例")
     return CaseOut(**asdict(fresh))
+
+
+@router.post("/{case_id}/move", summary="迁移用例到另一个项目（目标查重→写入目标→源删除）")
+def move_case(case_id: str, body: CaseMove, file: str = Query(default="data/api_cases.xlsx"),
+              _: dict = Depends(authz.require_perm("case:write"))):
+    """把一条用例从当前项目（file）迁到目标项目（to_file）。
+
+    顺序：先向目标追加（目标查重/表头/校验任一不过即拒绝，源文件不受影响），
+    再从源删除；若源删除失败（如被 Excel 占用），回滚目标追加，保证不出现双份。
+    """
+    src = _resolve_file(file)
+    dst = _resolve_file(body.to_file)
+    if src.is_dir() or dst.is_dir():
+        raise HTTPException(status_code=400, detail="目录模式下无法确定迁移的源/目标文件")
+    if src == dst:
+        raise HTTPException(status_code=400, detail="源项目与目标项目相同，无需迁移")
+
+    try:
+        result = _load_cached(src)
+    except ExcelFormatError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    target = next((c for c in result.cases if c.case_id == case_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"源项目中不存在用例: {case_id}")
+
+    # 组装目标行数据（全量字段，append_case 会忽略 row/source 等非编辑键）
+    data = asdict(target)
+    new_module = (body.new_module or "").strip()
+    if new_module:
+        data["module"] = new_module
+
+    # 相位一：写入目标（失败直接抛出，源未动）
+    try:
+        excel_writer.append_case(dst, data)
+    except CaseWriteError as e:
+        raise HTTPException(status_code=_ERROR_STATUS[e.kind], detail=str(e))
+
+    # 相位二：从源删除；失败则回滚目标追加，避免双份
+    try:
+        excel_writer.delete_case(src, case_id, target.row)
+    except CaseWriteError as e:
+        try:
+            dst_row = next((c.row for c in _load_cached(dst).cases if c.case_id == case_id), None)
+            if dst_row is not None:
+                excel_writer.delete_case(dst, case_id, dst_row)
+        except Exception:  # noqa: BLE001 回滚也失败：明确告知用户手工处理
+            raise HTTPException(status_code=500,
+                                detail=f"迁移未完成且回滚失败：目标项目可能已多出 {case_id}，请手工核对（源删除错误: {e}）")
+        raise HTTPException(status_code=_ERROR_STATUS[e.kind], detail=f"源用例删除失败，已回滚目标: {e}")
+
+    moved = next((c for c in _load_cached(dst).cases if c.case_id == case_id), None)
+    return {
+        "moved": case_id,
+        "from_file": str(src.relative_to(ROOT)).replace("\\", "/"),
+        "to_file": str(dst.relative_to(ROOT)).replace("\\", "/"),
+        "case": CaseOut(**asdict(moved)).model_dump() if moved else None,
+    }

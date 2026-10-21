@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -110,7 +110,22 @@ export const api = {
     priority?: string;
     keyword?: string;
     run?: boolean;
+    file?: string;
   }) => http.get<CasePage>("/cases", { params }).then((r) => r.data),
+
+  /* ---------- 用例项目（项目 = 一个 Excel 用例文件）---------- */
+  listProjects: () => http.get<Project[]>("/projects").then((r) => r.data),
+
+  createProject: (body: { name: string; desc?: string }) =>
+    http.post<Project>("/projects", body).then((r) => r.data),
+
+  updateProject: (id: string, body: { name?: string; desc?: string }) =>
+    http.put<Project>(`/projects/${encodeURIComponent(id)}`, body).then((r) => r.data),
+
+  deleteProject: (id: string) =>
+    http.delete<{ deleted: string; removed_file: string | null }>(
+      `/projects/${encodeURIComponent(id)}`
+    ).then((r) => r.data),
 
   listEnvs: () => http.get<EnvsResp>("/envs").then((r) => r.data),
 
@@ -119,25 +134,34 @@ export const api = {
     http.put<EnvsResp>("/envs", body).then((r) => r.data),
 
   /** 更新用例（只传改动字段；后端写回 Excel，校验不外溢） */
-  updateCase: (caseId: string, changes: Record<string, unknown>) =>
+  updateCase: (caseId: string, changes: Record<string, unknown>, file?: string) =>
     http
-      .put<CaseItem>(`/cases/${encodeURIComponent(caseId)}`, changes)
+      .put<CaseItem>(`/cases/${encodeURIComponent(caseId)}`, changes, { params: { file } })
       .then((r) => r.data),
 
   /** 新增用例（整行追加写回 Excel 末行，编号唯一） */
-  createCase: (data: Record<string, unknown>) =>
-    http.post<CaseItem>("/cases", data).then((r) => r.data),
+  createCase: (data: Record<string, unknown>, file?: string) =>
+    http.post<CaseItem>("/cases", data, { params: { file } }).then((r) => r.data),
 
   /** 删除用例（Excel 整行删除） */
-  deleteCase: (caseId: string) =>
+  deleteCase: (caseId: string, file?: string) =>
     http
       .delete<{ deleted: string; file: string }>(
-        `/cases/${encodeURIComponent(caseId)}`
+        `/cases/${encodeURIComponent(caseId)}`, { params: { file } }
+      )
+      .then((r) => r.data),
+
+  /** 迁移用例到另一个项目：源 file 走查询参数，to_file/new_module 走请求体 */
+  moveCase: (caseId: string, body: { to_file: string; new_module?: string }, file?: string) =>
+    http
+      .post<{ moved: string; from_file: string; to_file: string; case: CaseItem | null }>(
+        `/cases/${encodeURIComponent(caseId)}/move`, body, { params: { file } }
       )
       .then((r) => r.data),
 
   /** 编辑用元数据：优先级/模块/请求头/断言操作符/变量候选 */
-  getCaseMeta: () => http.get<CaseMeta>("/cases/meta").then((r) => r.data),
+  getCaseMeta: (file?: string) =>
+    http.get<CaseMeta>("/cases/meta", { params: { file } }).then((r) => r.data),
 
   listRuns: (limit = 20) =>
     http.get<RunItem[]>("/runs", { params: { limit } }).then((r) => r.data),
@@ -245,18 +269,18 @@ export const api = {
   runPlan: (id: string) =>
     http.post<RunItem>(`/plans/${encodeURIComponent(id)}/run`).then((r) => r.data),
 
-  /* ---------- 用例导入导出 ---------- */
+  /* ---------- 用例导入导出（target 为当前项目文件，走 file 查询参数） ---------- */
   /** 导出筛选结果为 xlsx 下载 */
-  exportCases: (params: { module?: string; priority?: string; keyword?: string; run?: boolean }) =>
+  exportCases: (params: { module?: string; priority?: string; keyword?: string; run?: boolean; file?: string }) =>
     http.get("/cases/export", { params, responseType: "blob" }).then((r) => r.data as Blob),
 
-  /** 导入 xlsx 文件追加用例 */
-  importCases: (file: File) => {
+  /** 导入 xlsx 文件追加用例到目标项目文件 */
+  importCases: (upload: File, targetFile?: string) => {
     const fd = new FormData();
-    fd.append("uploaded_file", file);
+    fd.append("uploaded_file", upload);
     return http
       .post<{ imported: number; skipped: number; errors: string[] }>("/cases/import", fd,
-        { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
+        { params: { file: targetFile }, headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
       .then((r) => r.data);
   },
 
@@ -265,20 +289,20 @@ export const api = {
     http.get("/cases/template", { responseType: "blob" }).then((r) => r.data as Blob),
 
   /** 智能导入预览：上传任意表头 xlsx，返回转换后的用例草稿与标注（不落盘） */
-  smartImportPreview: (file: File) => {
+  smartImportPreview: (upload: File, targetFile?: string) => {
     const fd = new FormData();
-    fd.append("uploaded_file", file);
+    fd.append("uploaded_file", upload);
     return http
       .post<ImportPreviewResp>("/cases/import/preview", fd,
-        { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
+        { params: { file: targetFile }, headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
       .then((r) => r.data);
   },
 
-  /** 智能导入落盘：把预览确认后的用例批量写入 */
-  smartImportConfirm: (cases: ImportCaseDraft[]) =>
+  /** 智能导入落盘：把预览确认后的用例批量写入目标项目文件 */
+  smartImportConfirm: (cases: ImportCaseDraft[], targetFile?: string) =>
     http
       .post<{ imported: number; skipped: number; errors: string[] }>("/cases/import/confirm", { cases },
-        { timeout: 60000 })
+        { params: { file: targetFile }, timeout: 60000 })
       .then((r) => r.data),
 
   /* ---------- 公共脚本（设计文档 2.4：前后置声明式步骤链） ---------- */

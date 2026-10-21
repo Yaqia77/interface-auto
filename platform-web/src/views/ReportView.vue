@@ -5,6 +5,7 @@ import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { RunCaseDetail, RunCaseSummary, RunItem } from "../types";
+import JsonViewer from "../components/JsonViewer.vue";
 
 const route = useRoute();
 const router = useRouter();
@@ -180,7 +181,8 @@ async function openDetail(row: RunCaseSummary) {
 
 /* ================= 联动重跑 ================= */
 function rerunCase(row: RunCaseSummary) {
-  router.push({ path: "/execution", query: { keyword: row.case_id } });
+  const a = (batch.value?.args ?? {}) as Record<string, unknown>;
+  router.push({ path: "/execution", query: { keyword: row.case_id, file: a.file ? String(a.file) : undefined } });
 }
 function rerunBatch() {
   const a = (batch.value?.args ?? {}) as Record<string, unknown>;
@@ -190,6 +192,7 @@ function rerunBatch() {
       module: a.module ? String(a.module) : undefined,
       priority: a.priority ? String(a.priority) : undefined,
       keyword: a.keyword ? String(a.keyword) : undefined,
+      file: a.file ? String(a.file) : undefined,
     },
   });
 }
@@ -326,8 +329,16 @@ function onBaselineChange() {
 }
 
 const durFmt = (ms: number) => (ms / 1000).toFixed(2) + "s";
-const fmt = (v: unknown) => (v == null ? "—" : JSON.stringify(v, null, 2));
 const strVal = (v: unknown) => (v == null ? "—" : typeof v === "object" ? JSON.stringify(v) : String(v));
+/** 断言操作符中文标签 */
+const OP_LABELS: Record<string, string> = {
+  eq: "等于", neq: "不等于", contains: "包含",
+  gt: "大于", ge: "大于等于", lt: "小于", le: "小于等于",
+  regex: "正则匹配", not_null: "不为空", len_eq: "长度等于",
+};
+const opLabel = (op: string) => OP_LABELS[op] || op;
+/** 判断断言期望/实际值是否为复杂结构（需要 JsonViewer 格式化展示） */
+const isComplex = (v: unknown) => v != null && typeof v === "object";
 
 /* ================= 导出 PDF（新窗口自包含打印文档，零后端） ================= */
 const esc = (v: unknown): string =>
@@ -612,24 +623,32 @@ watch(runId, () => load());
       <div v-loading="detailLoading" style="min-height: 240px">
         <el-tabs v-if="detail" v-model="detailTab">
           <el-tab-pane label="请求快照" name="req">
-            <pre class="json">{{ fmt(detail.request) }}</pre>
+            <JsonViewer :data="detail.request" />
           </el-tab-pane>
           <el-tab-pane label="响应快照" name="resp">
-            <pre class="json">{{ fmt(detail.response) }}</pre>
+            <JsonViewer :data="detail.response" />
           </el-tab-pane>
           <el-tab-pane label="断言结果" name="assert">
             <el-table v-if="detail.assertions && detail.assertions.length" :data="detail.assertions" size="small">
-              <el-table-column prop="op" label="操作符" width="90" />
-              <el-table-column prop="path" label="取值路径" min-width="150">
+              <el-table-column label="操作符" width="72">
+                <template #default="{ row }"><span>{{ opLabel(row.op) }}</span></template>
+              </el-table-column>
+              <el-table-column label="取值路径" width="130">
                 <template #default="{ row }"><span class="mono">{{ row.path }}</span></template>
               </el-table-column>
-              <el-table-column label="期望" min-width="110">
-                <template #default="{ row }"><span class="mono">{{ strVal(row.expected) }}</span></template>
+              <el-table-column label="期望" width="90">
+                <template #default="{ row }">
+                  <JsonViewer v-if="isComplex(row.expected)" :data="row.expected" :max-height="160" />
+                  <span v-else class="mono">{{ strVal(row.expected) }}</span>
+                </template>
               </el-table-column>
-              <el-table-column label="实际" min-width="110">
-                <template #default="{ row }"><span class="mono">{{ strVal(row.actual) }}</span></template>
+              <el-table-column label="实际" min-width="300">
+                <template #default="{ row }">
+                  <JsonViewer v-if="isComplex(row.actual)" :data="row.actual" :max-height="260" />
+                  <span v-else class="mono">{{ strVal(row.actual) }}</span>
+                </template>
               </el-table-column>
-              <el-table-column label="结果" width="70">
+              <el-table-column label="结果" width="50">
                 <template #default="{ row }">
                   <el-tag :type="row.passed ? 'success' : 'danger'" size="small">{{ row.passed ? "✓" : "✗" }}</el-tag>
                 </template>
