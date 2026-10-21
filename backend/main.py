@@ -8,7 +8,7 @@
 from pathlib import Path
 
 import anyio
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
@@ -159,7 +159,7 @@ _CONFIG_ERROR_STATUS = {"invalid": 400, "not_found": 404, "locked": 409}
 
 
 @app.put("/api/envs", tags=["系统"], summary="保存环境配置（写回 config.yaml 并即时生效）")
-def update_envs(payload: EnvsUpdate):
+def update_envs(payload: EnvsUpdate, _: dict = Depends(authz.require_perm("env:manage"))):
     """整体覆盖式写回环境段：行级替换保留注释/其余章节，校验通过才落盘。
 
     load_config 无缓存，写回后下一次执行/拉取即读到新配置，无需重启。

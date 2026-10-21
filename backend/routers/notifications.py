@@ -1,7 +1,7 @@
-"""Webhook 通知配置 CRUD + 测试发送。"""
-from fastapi import APIRouter, HTTPException
+"""Webhook 通知配置 CRUD + 测试发送（写操作需 webhook:manage）。"""
+from fastapi import APIRouter, Depends, HTTPException
 
-from backend import notification_store
+from backend import authz, notification_store
 from backend.notifier import _build_body, _post_one
 from backend.schemas import WebhookCreate, WebhookOut, WebhookUpdate
 
@@ -14,7 +14,7 @@ def list_webhooks():
 
 
 @router.post("", response_model=WebhookOut, summary="新建 Webhook", status_code=201)
-def create_webhook(body: WebhookCreate):
+def create_webhook(body: WebhookCreate, _: dict = Depends(authz.require_perm("webhook:manage"))):
     item = notification_store.create(
         name=body.name,
         url=body.url,
@@ -34,7 +34,7 @@ def get_webhook(webhook_id: str):
 
 
 @router.put("/{webhook_id}", response_model=WebhookOut, summary="更新")
-def update_webhook(webhook_id: str, body: WebhookUpdate):
+def update_webhook(webhook_id: str, body: WebhookUpdate, _: dict = Depends(authz.require_perm("webhook:manage"))):
     fields = body.model_dump(exclude_none=True)
     if not fields:
         raise HTTPException(status_code=400, detail="未传任何需修改字段")
@@ -45,14 +45,14 @@ def update_webhook(webhook_id: str, body: WebhookUpdate):
 
 
 @router.delete("/{webhook_id}", summary="删除")
-def delete_webhook(webhook_id: str):
+def delete_webhook(webhook_id: str, _: dict = Depends(authz.require_perm("webhook:manage"))):
     if not notification_store.delete(webhook_id):
         raise HTTPException(status_code=404, detail="Webhook 不存在")
     return {"ok": True}
 
 
 @router.post("/{webhook_id}/test", summary="测试发送（模拟一条通过通知）")
-def test_webhook(webhook_id: str):
+def test_webhook(webhook_id: str, _: dict = Depends(authz.require_perm("webhook:manage"))):
     """向配置的 URL 发送一条测试消息，验证连通性。"""
     item = notification_store.get(webhook_id)
     if item is None:

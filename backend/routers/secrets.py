@@ -1,10 +1,10 @@
 """凭证管理接口：读写 secret_vars.xlsx「全局变量」表，值全程掩码，绝不回显明文。"""
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from backend import secrets_writer
+from backend import authz, secrets_writer
 from backend.secrets_writer import SecretError
 from core.context import load_config
 
@@ -48,18 +48,18 @@ def list_secrets():
 
 
 @router.post("", status_code=201, summary="新增凭证变量（文件不存在时自动创建）")
-def create_secret(body: SecretCreate):
+def create_secret(body: SecretCreate, _: dict = Depends(authz.require_perm("secret:manage"))):
     _guard(secrets_writer.create_secret, _path(), body.name, body.value, body.remark)
     return list_secrets()
 
 
 @router.put("/{name}", summary="更新凭证变量（value 留空表示不改值，仅改备注）")
-def update_secret(name: str, body: SecretUpdate):
+def update_secret(name: str, body: SecretUpdate, _: dict = Depends(authz.require_perm("secret:manage"))):
     _guard(secrets_writer.update_secret, _path(), name, body.value, body.remark)
     return list_secrets()
 
 
 @router.delete("/{name}", summary="删除凭证变量（整行删除）")
-def delete_secret(name: str):
+def delete_secret(name: str, _: dict = Depends(authz.require_perm("secret:manage"))):
     _guard(secrets_writer.delete_secret, _path(), name)
     return list_secrets()

@@ -5,11 +5,11 @@ from dataclasses import asdict
 from io import BytesIO
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 
-from backend import excel_writer
+from backend import authz, excel_writer
 from backend.excel_writer import CaseWriteError
 from backend.schemas import CaseCreate, CaseOut, CasePage, CaseUpdate
 from core import excel_loader
@@ -212,7 +212,8 @@ _ERROR_STATUS = {"invalid": 400, "not_found": 404, "conflict": 409, "locked": 40
 
 
 @router.post("", response_model=CaseOut, summary="新增用例（追加行写回 Excel）", status_code=201)
-def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx")):
+def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx"),
+                _: dict = Depends(authz.require_perm("case:write"))):
     path = _resolve_file(file)
     if path.is_dir():
         raise HTTPException(status_code=400, detail="目录模式下无法确定新增目标文件，请指定具体 xlsx")
@@ -231,6 +232,7 @@ def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx
 async def import_cases(
     uploaded_file: UploadFile = File(..., description="xlsx 文件，格式与导出一致"),
     file: str = Query(default="data/api_cases.xlsx", description="目标用例文件"),
+    _: dict = Depends(authz.require_perm("case:write")),
 ):
     # 校验目标
     path = _resolve_file(file)
@@ -268,7 +270,8 @@ async def import_cases(
 
 
 @router.delete("/{case_id}", summary="删除用例（Excel 整行删除，校验通过才落盘）")
-def delete_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
+def delete_case(case_id: str, file: str = Query(default="data/api_cases.xlsx"),
+                _: dict = Depends(authz.require_perm("case:delete"))):
     path = _resolve_file(file)
     try:
         result = _load_cached(path)
@@ -286,7 +289,8 @@ def delete_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
 
 
 @router.put("/{case_id}", response_model=CaseOut, summary="更新用例（写回 Excel，校验通过才落盘）")
-def update_case(case_id: str, body: CaseUpdate, file: str = Query(default="data/api_cases.xlsx")):
+def update_case(case_id: str, body: CaseUpdate, file: str = Query(default="data/api_cases.xlsx"),
+                _: dict = Depends(authz.require_perm("case:write"))):
     path = _resolve_file(file)
     try:
         result = _load_cached(path)

@@ -46,15 +46,18 @@ _MODULE_BY_PREFIX = (
     ("/api/runs", "执行与报告"),
     ("/api/schedules", "定时任务"),
     ("/api/secrets", "凭证管理"),
+    ("/api/webhooks", "通知配置"),
     ("/api/notifications", "通知配置"),
     ("/api/envs", "环境配置"),
     ("/api/config", "系统配置"),
+    ("/api/scripts", "公共脚本"),
 )
 
 # 路径尾段是集合名/动词时无标识意义，不作为“对象”
 _NOISE_TAIL = {
     "runs", "cases", "users", "plans", "login", "logout", "me", "cleanup", "audit",
     "secrets", "schedules", "notifications", "dependencies", "envs", "auth", "health", "config",
+    "webhooks", "scripts",
 }
 
 

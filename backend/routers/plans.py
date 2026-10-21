@@ -1,7 +1,7 @@
 """测试场景接口：CRUD + 一键按场景发起执行。"""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from backend import plan_store
+from backend import authz, plan_store
 from backend.schemas import PlanCreate, PlanOut, PlanUpdate, RunCreate
 
 router = APIRouter(prefix="/api/plans", tags=["测试场景"])
@@ -13,7 +13,7 @@ def list_plans():
 
 
 @router.post("", response_model=PlanOut, status_code=201, summary="新建场景")
-def create_plan(body: PlanCreate):
+def create_plan(body: PlanCreate, _: dict = Depends(authz.require_perm("plan:manage"))):
     if not body.case_ids:
         raise HTTPException(status_code=400, detail="场景内至少需要一条用例")
     plan = plan_store.create(
@@ -34,7 +34,7 @@ def get_plan(plan_id: str):
 
 
 @router.put("/{plan_id}", response_model=PlanOut, summary="更新场景（名称/描述/用例范围/环境偏好）")
-def update_plan(plan_id: str, body: PlanUpdate):
+def update_plan(plan_id: str, body: PlanUpdate, _: dict = Depends(authz.require_perm("plan:manage"))):
     fields = body.model_dump(exclude_none=True)
     if not fields:
         raise HTTPException(status_code=400, detail="未传任何需要修改的字段")
@@ -47,14 +47,14 @@ def update_plan(plan_id: str, body: PlanUpdate):
 
 
 @router.delete("/{plan_id}", summary="删除场景")
-def delete_plan(plan_id: str):
+def delete_plan(plan_id: str, _: dict = Depends(authz.require_perm("plan:manage"))):
     if not plan_store.delete(plan_id):
         raise HTTPException(status_code=404, detail=f"场景不存在: {plan_id}")
     return {"ok": True}
 
 
 @router.post("/{plan_id}/run", summary="按场景发起执行（复用执行中心 create_run）", status_code=202)
-def run_plan(plan_id: str):
+def run_plan(plan_id: str, _: dict = Depends(authz.require_perm("run:create"))):
     """将场景的 case_ids 精确传入 create_run，同时记录 last_run_id/at 供卡片展示。"""
     plan = plan_store.get(plan_id)
     if plan is None:

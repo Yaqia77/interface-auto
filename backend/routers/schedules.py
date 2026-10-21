@@ -1,10 +1,10 @@
-"""定时任务 CRUD + 手动触发 + Cron 预览。"""
+"""定时任务 CRUD + 手动触发 + Cron 预览（编辑需 schedule:manage）。"""
 from datetime import datetime
 
 from croniter import croniter
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend import scheduler_store
+from backend import authz, scheduler_store
 from backend.schemas import ScheduleCreate, ScheduleOut, ScheduleUpdate
 
 router = APIRouter(prefix="/api/schedules", tags=["定时任务"])
@@ -16,7 +16,7 @@ def list_schedules():
 
 
 @router.post("", response_model=ScheduleOut, summary="新建定时任务", status_code=201)
-def create_schedule(body: ScheduleCreate):
+def create_schedule(body: ScheduleCreate, _: dict = Depends(authz.require_perm("schedule:manage"))):
     # 校验 cron 表达式
     try:
         croniter(body.cron)
@@ -43,7 +43,8 @@ def get_schedule(schedule_id: str):
 
 
 @router.put("/{schedule_id}", response_model=ScheduleOut, summary="更新")
-def update_schedule(schedule_id: str, body: ScheduleUpdate):
+def update_schedule(schedule_id: str, body: ScheduleUpdate,
+                    _: dict = Depends(authz.require_perm("schedule:manage"))):
     fields = body.model_dump(exclude_none=True)
     if not fields:
         raise HTTPException(status_code=400, detail="未传任何需修改字段")
@@ -60,14 +61,14 @@ def update_schedule(schedule_id: str, body: ScheduleUpdate):
 
 
 @router.delete("/{schedule_id}", summary="删除")
-def delete_schedule(schedule_id: str):
+def delete_schedule(schedule_id: str, _: dict = Depends(authz.require_perm("schedule:manage"))):
     if not scheduler_store.delete(schedule_id):
         raise HTTPException(status_code=404, detail="定时任务不存在")
     return {"ok": True}
 
 
 @router.post("/{schedule_id}/run", summary="手动触发一次执行")
-def run_schedule(schedule_id: str):
+def run_schedule(schedule_id: str, _: dict = Depends(authz.require_perm("run:create"))):
     """立即执行一次，不改变 next_run_at。"""
     item = scheduler_store.get(schedule_id)
     if item is None:

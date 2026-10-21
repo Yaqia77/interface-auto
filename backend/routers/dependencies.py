@@ -1,7 +1,7 @@
-"""用例依赖关系管理接口。"""
-from fastapi import APIRouter, HTTPException
+"""用例依赖关系管理接口（写入权限同用例编辑：case:write）。"""
+from fastapi import APIRouter, Depends, HTTPException
 
-from backend import dependency_store
+from backend import authz, dependency_store
 from backend.schemas import DepsSetRequest
 
 router = APIRouter(prefix="/api/dependencies", tags=["用例依赖"])
@@ -19,7 +19,7 @@ def get_deps(case_id: str):
 
 
 @router.put("/{case_id}", summary="设置用例依赖（覆盖式）")
-def set_deps(case_id: str, body: DepsSetRequest):
+def set_deps(case_id: str, body: DepsSetRequest, _: dict = Depends(authz.require_perm("case:write"))):
     # 自依赖检测
     if case_id in body.dependencies:
         raise HTTPException(status_code=400, detail="不能依赖自身")
@@ -32,7 +32,7 @@ def set_deps(case_id: str, body: DepsSetRequest):
 
 
 @router.post("/{case_id}/add", summary="添加单条依赖")
-def add_dep(case_id: str, dep_id: str):
+def add_dep(case_id: str, dep_id: str, _: dict = Depends(authz.require_perm("case:write"))):
     if case_id == dep_id:
         raise HTTPException(status_code=400, detail="不能依赖自身")
     if dependency_store.has_cycle(case_id, dep_id):
@@ -42,6 +42,6 @@ def add_dep(case_id: str, dep_id: str):
 
 
 @router.delete("/{case_id}/remove", summary="移除单条依赖")
-def remove_dep(case_id: str, dep_id: str):
+def remove_dep(case_id: str, dep_id: str, _: dict = Depends(authz.require_perm("case:write"))):
     removed = dependency_store.remove_dep(case_id, dep_id)
     return {"removed": removed, "dependencies": dependency_store.get_deps(case_id)}

@@ -181,7 +181,7 @@ def _worker(run_id: str, cmd: list[str]):
 
 
 @router.post("", response_model=RunOut, summary="发起执行批次", status_code=202)
-def create_run(body: RunCreate):
+def create_run(body: RunCreate, _: dict = Depends(authz.require_perm("run:create"))):
     # 用例文件存在性前置校验（格式错误留给执行时报错，与 CLI 行为一致）
     f = Path(body.file)
     if not f.is_absolute():
@@ -304,7 +304,7 @@ def get_run(run_id: str):
 
 
 @router.post("/{run_id}/cancel", summary="取消运行中的批次（终止子进程树）")
-def cancel_run(run_id: str):
+def cancel_run(run_id: str, _: dict = Depends(authz.require_perm("run:create"))):
     with _LOCK:
         if not _loaded:
             _load_history()

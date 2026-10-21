@@ -6,8 +6,10 @@
     python tools/smoke_authz.py                  # 默认打 127.0.0.1:8000
     set IA_BASE=http://127.0.0.1:8899 && python tools/smoke_authz.py
 
-覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD、操作审计留痕、角色权限矩阵可视化编辑。
-脚本只在 reports/ 下造一个 1970 年的假批次并删除它，不触碰任何真实报告，可重复执行。
+覆盖：登录/登出、未登录 401、越权 403、报告删除与保留策略清理、路径穿越护栏、用户 CRUD、操作审计留痕、
+角色权限矩阵可视化编辑（8.2）、全部写接口的后端权限拦截（前端隐藏 ≠ 后端放行）。
+脚本只在 reports/ 下造一个 1970 年的假批次并删除它，不触碰任何真实报告，可重复执行；
+第 7 节的越权探测全部用「必填字段留空 / 资源不存在 / 自依赖」构造，探测前后会比对各类数据条数，确保零副作用。
 """
 import json
 import os
@@ -20,7 +22,8 @@ from pathlib import Path
 
 BASE = os.environ.get("IA_BASE", "http://127.0.0.1:8000").rstrip("/")
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_PASS = {"admin": "admin123", "tl": "tl123", "qa": "qa123", "viewer": "viewer123"}
+DEFAULT_PASS = {"admin": "admin123", "tl": "tl123", "qa": "qa123",
+                "dev": "dev123", "viewer": "viewer123"}
 
 # 用 cli 目录形式造一个干净的假批次（不污染 runs_history，只被 list_runs 的目录认领分支扫到）
 FAKE_ID = "run_19700101_000000"
@@ -285,6 +288,98 @@ def main():
     if perm_logs:
         check("审计可回溯到具体权限动作", any("权限" in (h.get("action") or "") for h in perm_logs),
               perm_logs[0].get("action"))
+
+    print("== 7. 写接口后端权限拦截（前端隐藏 ≠ 后端放行） ==")
+    # 探测体全部构造为「必定失败」：必填字段留空 → 422，资源不存在 → 404，自依赖 → 400。
+    # FastAPI 先跑依赖再校 body，故守卫缺失时返回的是业务错误码而非 403，能直接坐实缺口；
+    # 同时即使某个接口忘了加守卫，这些请求也不会真的写坏数据。
+    probes = [
+        ("POST", "/api/cases", {"api_name": None}, "新增用例", "case:write"),
+        ("POST", "/api/cases/import", None, "导入用例", "case:write"),
+        ("PUT", "/api/cases/IA_SMOKE_NO_SUCH", {"priority": "P0"}, "更新用例", "case:write"),
+        ("DELETE", "/api/cases/IA_SMOKE_NO_SUCH", None, "删除用例", "case:delete"),
+        ("PUT", "/api/dependencies/IA_SMOKE_SELF", {"dependencies": ["IA_SMOKE_SELF"]},
+         "设置用例依赖", "case:write"),
+        ("POST", "/api/plans", {"name": None}, "新建场景", "plan:manage"),
+        ("PUT", "/api/plans/ia_smoke_no_such", {"name": "x"}, "更新场景", "plan:manage"),
+        ("DELETE", "/api/plans/ia_smoke_no_such", None, "删除场景", "plan:manage"),
+        ("POST", "/api/secrets", {"name": None}, "新建凭证", "secret:manage"),
+        ("PUT", "/api/secrets/ia_smoke_no_such", {"value": "x"}, "更新凭证", "secret:manage"),
+        ("DELETE", "/api/secrets/ia_smoke_no_such", None, "删除凭证", "secret:manage"),
+        ("PUT", "/api/envs", {"default_env": None}, "保存环境配置", "env:manage"),
+        ("POST", "/api/webhooks", {"name": None}, "新建 Webhook", "webhook:manage"),
+        ("PUT", "/api/webhooks/ia_smoke_no_such", {"name": "x"}, "更新 Webhook", "webhook:manage"),
+        ("DELETE", "/api/webhooks/ia_smoke_no_such", None, "删除 Webhook", "webhook:manage"),
+        ("POST", "/api/webhooks/ia_smoke_no_such/test", None, "测试 Webhook", "webhook:manage"),
+        ("POST", "/api/schedules", {"name": None}, "新建定时任务", "schedule:manage"),
+        ("PUT", "/api/schedules/ia_smoke_no_such", {"name": "x"}, "更新定时任务", "schedule:manage"),
+        ("DELETE", "/api/schedules/ia_smoke_no_such", None, "删除定时任务", "schedule:manage"),
+        ("POST", "/api/runs/ia_smoke_no_such/cancel", None, "取消批次", "run:create"),
+    ]
+
+    def snapshot() -> dict:
+        """各类业务数据条数快照，用于证明一轮探测零副作用。"""
+        snap: dict = {}
+        code, page = req("GET", "/api/cases", token=admin_token)
+        snap["用例"] = page.get("total") if code == 200 else None
+        for key, path in (("场景", "/api/plans"), ("凭证", "/api/secrets"),
+                          ("Webhook", "/api/webhooks"), ("定时任务", "/api/schedules")):
+            code, resp = req("GET", path, token=admin_token)
+            if code != 200:
+                snap[key] = None
+            elif isinstance(resp, list):
+                snap[key] = len(resp)
+            else:  # 凭证接口是 {"exists": .., "items": [..]} 包装
+                snap[key] = len(resp.get("items") or [])
+        code, resp = req("GET", "/api/envs", token=admin_token)
+        snap["环境"] = (resp.get("default_env"), len(resp.get("envs") or [])) if code == 200 else None
+        return snap
+
+    before = snapshot()
+    check("探测前数据快照可读", all(v is not None for v in before.values()), before)
+    matrix_now = req("GET", "/api/auth/permissions", token=admin_token)[1]["matrix"]
+    dev_token, dev_user = login("dev", DEFAULT_PASS["dev"])
+    check("dev 仅持有触发执行权限", dev_user["permissions"] == ["run:create"], dev_user["permissions"])
+    tokens = {"admin": admin_token, "tl": tl_token, "qa": qa_token, "dev": dev_token, "viewer": vt}
+
+    miss = []
+    for method, path, body, label, _perm in probes:
+        code, resp = req(method, path, body, vt)
+        if code != 403:
+            miss.append(f"{label}→{code}")
+    check(f"viewer 的 {len(probes)} 个写探测全部被后端 403 拦截", not miss, miss)
+
+    # 持有对应权限码的角色（取矩阵里首个非 admin，更贴近真实使用路径）必须能越过权限层，
+    # 但因探测体故意非法，不能拿到 2xx（既证明不是「一律放行」，也证明没有写成功）
+    leak = []
+    for method, path, body, label, perm in probes:
+        holder = next((r for r in matrix_now.get(perm, []) if r in tokens and r != "admin"), "admin")
+        code, resp = req(method, path, body, tokens[holder])
+        if code == 403 or 200 <= code < 300:
+            leak.append(f"{label}({holder})→{code}")
+    check("持权角色均越过权限层且未写成功（按权限码分治而非一刀切）", not leak, leak)
+
+    code, resp = req("PUT", "/api/cases/IA_SMOKE_NO_SUCH", {"priority": "P0"}, qa_token)
+    check("qa 改用例已越过权限层", code != 403, f"{code} {resp}")
+    code, resp = req("DELETE", "/api/cases/IA_SMOKE_NO_SUCH", token=qa_token)
+    check("qa 删用例仍被拦 403（case:delete 需 TL+）", code == 403, f"{code} {resp}")
+    code, resp = req("PUT", "/api/cases/IA_SMOKE_NO_SUCH", {"priority": "P0"}, dev_token)
+    check("dev 改用例被拦 403（低权限角色不误放行）", code == 403, f"{code} {resp}")
+    code, resp = req("POST", "/api/runs/ia_smoke_no_such/cancel", token=dev_token)
+    check("dev 取消批次落到业务 404（已穿过权限层）", code == 404, f"{code} {resp}")
+
+    after = snapshot()
+    check("一轮探测零副作用（用例/场景/凭证/Webhook/定时/环境均未变）",
+          before == after, {k: (before[k], after[k]) for k in before if before[k] != after[k]})
+
+    code, resp = req("GET",
+                     "/api/audit/logs?only_failed=true&username=viewer&limit=500", token=admin_token)
+    hits = resp.get("items", []) if code == 200 else []
+    check("viewer 的越权写尝试整体落审计（失败记录 ≥ 探测次数）",
+          code == 200 and len(hits) >= len(probes), f"{len(hits)} 条 / 探测 {len(probes)} 次")
+    check("审计动作名可直接读（取到路由中文 summary）",
+          all(h.get("action") and h["action"] != h["method"] for h in hits),
+          [h.get("action") for h in hits[:3]])
 
     # ---- 收尾：删除假批次目录（不碰任何真实报告） ----
     shutil.rmtree(FAKE_DIR, ignore_errors=True)
