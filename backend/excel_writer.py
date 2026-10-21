@@ -19,7 +19,12 @@ FIELD_TO_HEADER = {f: h for h, f in CASE_COLUMNS.items()}
 
 # 可编辑字段（case_id 不可改：它是行锁定位的锚点；编号变更请走“新增+停用”）
 EDITABLE_FIELDS = {"module", "api_name", "case_desc", "priority", "run", "method",
-                   "url", "headers", "params", "body", "extract", "asserts", "timeout"}
+                   "url", "headers", "params", "body", "extract", "asserts", "timeout",
+                   "pre_scripts", "post_scripts"}
+
+# 后新增的可选列：存量 Excel 没这两列，首次真正用到时才就地补表头，
+# 不让用户为了引用一个脚本而手工重建用例文件。
+_AUTO_HEADER_FIELDS = ("pre_scripts", "post_scripts")
 
 
 class CaseWriteError(Exception):
@@ -72,6 +77,20 @@ def _serialize(field: str, value):
         if not isinstance(value, list) or not value:
             raise CaseWriteError("invalid", "断言必须是非空数组，如 [[\"eq\",\"$.code\",0]]")
         return json.dumps(value, ensure_ascii=False)
+    if field in _AUTO_HEADER_FIELDS:
+        # 前置/后置脚本：列表 → 逗号分隔单元格文本（与 excel_loader.split_refs 无损往返）
+        if not isinstance(value, list):
+            raise CaseWriteError("invalid",
+                                 f"{FIELD_TO_HEADER[field]} 必须是脚本名数组，如 [\"登录取token\"]")
+        if not all(isinstance(v, str) for v in value):
+            raise CaseWriteError("invalid", f"{FIELD_TO_HEADER[field]} 只能放脚本名字符串")
+        names = list(dict.fromkeys(v.strip() for v in value if v.strip()))
+        joined = excel_loader.join_refs(names)
+        if not joined:
+            return None
+        if excel_loader.split_refs(joined) != names:
+            raise CaseWriteError("invalid", f"脚本名不能含逗号等分隔符: {value}")
+        return joined
     # 文本类：module / api_name / case_desc / url
     v = str(value or "").strip()
     if not v:
@@ -97,8 +116,13 @@ def apply_update(file_path: Path, case_id: str, row: int, changes: dict) -> None
         for field, value in changes.items():
             col = field_to_col.get(field)
             if col is None:
-                # 可选列在存量表头中不存在（如「超时(秒)」列缺失）：拒绝而非静默丢改动
-                raise CaseWriteError("invalid", f"文件 {file_path.name} 没有「{FIELD_TO_HEADER[field]}」列，无法保存该字段")
+                if field not in _AUTO_HEADER_FIELDS:
+                    # 可选列在存量表头中不存在（如「超时(秒)」列缺失）：拒绝而非静默丢改动
+                    raise CaseWriteError("invalid",
+                                         f"文件 {file_path.name} 没有「{FIELD_TO_HEADER[field]}」列，无法保存该字段")
+                if not value:
+                    continue        # 该列本就不存在，且本次是清空引用：无事可做
+                col = _ensure_column(ws, field_to_col, field)
             ws.cell(row=row, column=col).value = _serialize(field, value)
 
         _save_validated(wb, file_path)
@@ -144,7 +168,10 @@ def append_case(file_path: Path, data: dict) -> None:
                 continue  # 未知键忽略（pydantic 已挡，防御性）
             col = field_to_col.get(field)
             if col is None:
-                continue  # 可选列缺失时跳过；必填列缺失在下方 _serialize 后统一报
+                if field in _AUTO_HEADER_FIELDS and value:
+                    col = _ensure_column(ws, field_to_col, field)
+                else:
+                    continue  # 可选列缺失时跳过；必填列缺失在下方 _serialize 后统一报
             ws.cell(row=row, column=col).value = _serialize(field, value)
         for f in ("api_name", "url", "method", "asserts", "module", "case_desc", "priority", "run"):
             if f not in field_to_col:
@@ -181,6 +208,15 @@ def _sheet_of(wb, file_path: Path):
     if "case_id" not in field_to_col:
         raise CaseWriteError("invalid", "「用例」表缺少「用例编号」列")
     return ws, field_to_col
+
+
+def _ensure_column(ws, field_to_col: dict[str, int], field: str) -> int:
+    """可选列表头缺失时在末列补一个同名列，并登记到 field_to_col。"""
+    header = FIELD_TO_HEADER[field]
+    col = ws.max_column + 1
+    ws.cell(row=1, column=col).value = header
+    field_to_col[field] = col
+    return col
 
 
 def _assert_row_lock(ws, field_to_col: dict[str, int], case_id: str, row: int) -> None:
@@ -265,12 +301,16 @@ def bulk_append(file_path: Path, cases: list) -> dict:
             has_error = False
             for field in ("module", "api_name", "case_desc", "priority", "run",
                           "method", "url", "headers", "params", "body",
-                          "extract", "asserts", "timeout"):
+                          "extract", "asserts", "timeout",
+                          "pre_scripts", "post_scripts"):
+                val = getattr(tc, field, None)
                 col = field_to_col.get(field)
                 if col is None:
-                    continue
+                    if field in _AUTO_HEADER_FIELDS and val:
+                        _ensure_column(ws, field_to_col, field)
+                    else:
+                        continue
                 try:
-                    val = getattr(tc, field, None)
                     row_values[field] = _serialize(field, val)
                 except CaseWriteError as e:
                     errors.append(f"{cid}: {e}")

@@ -4,7 +4,7 @@ import { computed, onMounted, reactive, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { CaseHistoryResp, CaseItem, CaseMeta } from "../types";
+import type { CaseHistoryResp, CaseItem, CaseMeta, ScriptItem } from "../types";
 
 const router = useRouter();
 const route = useRoute();
@@ -127,7 +127,17 @@ const form = reactive({
   url: "",
   timeout: "",
   body: "",
+  pre_scripts: [] as string[],
+  post_scripts: [] as string[],
 });
+
+/* 公共脚本候选（设计文档 2.4）：后端保存用例会校验脚本存在性，故只允许从库里选 */
+const scriptOptions = ref<ScriptItem[]>([]);
+async function loadScripts() {
+  try {
+    scriptOptions.value = await api.listScripts();
+  } catch { /* 拿不到候选不阻断用例编辑 */ }
+}
 
 const hdrRows = ref<KvRow[]>([]);
 const prmRows = ref<KvRow[]>([]);
@@ -328,6 +338,8 @@ function openEdit(row: CaseItem) {
   prmRows.value = objToRows(row.params);
   extRows.value = objToRows(row.extract);
   asrtRows.value = assertsToRows(row.asserts);
+  form.pre_scripts = [...(row.pre_scripts ?? [])];
+  form.post_scripts = [...(row.post_scripts ?? [])];
   editVisible.value = true;
 }
 
@@ -338,7 +350,7 @@ function openCreate() {
   copyFrom.value = "";
   Object.assign(form, {
     case_id: "", module: "", api_name: "", case_desc: "", priority: "P2", run: true,
-    method: "GET", url: "", timeout: "", body: "",
+    method: "GET", url: "", timeout: "", body: "", pre_scripts: [], post_scripts: [],
   });
   hdrRows.value = [];
   prmRows.value = [];
@@ -392,6 +404,8 @@ function collectAll(): Record<string, unknown> | null {
   if (asserts === null) return null;
   if (asserts.length === 0) { ElMessage.error("至少保留一条断言"); return null; }
   out.asserts = asserts;
+  if (form.pre_scripts.length) out.pre_scripts = form.pre_scripts;
+  if (form.post_scripts.length) out.post_scripts = form.post_scripts;
   return out;
 }
 
@@ -445,6 +459,12 @@ function buildChanges(): Record<string, unknown> | null {
   if (asserts === null) return null;
   if (asserts.length === 0) { ElMessage.error("至少保留一条断言"); return null; }
   if (normAsserts(asserts) !== normAsserts(row.asserts)) changes.asserts = asserts;
+
+  // 脚本引用：顺序即执行顺序，不能当成集合比对
+  const sameList = (a: string[], b: string[]) =>
+    a.length === b.length && a.every((v, i) => v === b[i]);
+  if (!sameList(form.pre_scripts, row.pre_scripts ?? [])) changes.pre_scripts = form.pre_scripts;
+  if (!sameList(form.post_scripts, row.post_scripts ?? [])) changes.post_scripts = form.post_scripts;
 
   if (Object.keys(changes).length === 0) { ElMessage.info("没有需要保存的改动"); return null; }
   return changes;
@@ -572,6 +592,7 @@ onMounted(async () => {
   }
   search();
   try { meta.value = await api.getCaseMeta(); } catch { /* 拦截器已提示 */ }
+  loadScripts();
 });
 </script>
 
@@ -660,6 +681,12 @@ onMounted(async () => {
                 </el-descriptions-item>
                 <el-descriptions-item label="断言">
                   <pre class="json">{{ fmt(row.asserts) }}</pre>
+                </el-descriptions-item>
+                <el-descriptions-item label="公共脚本">
+                  <span v-if="(row.pre_scripts ?? []).length || (row.post_scripts ?? []).length">
+                    前置：{{ (row.pre_scripts ?? []).join(" → ") || "—" }} ｜ 后置：{{ (row.post_scripts ?? []).join(" → ") || "—" }}
+                  </span>
+                  <span v-else class="dim">未引用</span>
                 </el-descriptions-item>
                 <el-descriptions-item label="来源">
                   {{ row.source }} 第 {{ row.row }} 行 ｜ 超时 {{ row.timeout ?? "默认" }}
@@ -821,6 +848,31 @@ onMounted(async () => {
           <el-button text type="danger" @click="asrtRows.splice(i, 1)">✕</el-button>
         </div>
         <el-button size="small" @click="asrtRows.push({ op: 'eq', path: '', expected: '' })">＋ 添加断言</el-button>
+
+        <el-divider content-position="left">前后置公共脚本</el-divider>
+        <div class="hint">
+          前置脚本任一步失败即中断（主请求不发）；后置脚本无论主流程成败都会执行（用来清理造出的数据）。
+          多个脚本按选中顺序串行执行，写回 Excel 的「前置脚本 / 后置脚本」列（逗号分隔）。
+          <el-button link type="primary" size="small" @click="router.push('/scripts')">去脚本库新建</el-button>
+        </div>
+        <el-form-item label="前置脚本">
+          <el-select v-model="form.pre_scripts" multiple filterable collapse-tags style="width: 100%"
+                     placeholder="不引用 = 留空">
+            <el-option v-for="s in scriptOptions" :key="s.name" :value="s.name" :label="s.name">
+              <span class="opt-key">{{ s.name }}</span>
+              <span class="opt-val">{{ s.steps.length }} 步 · {{ s.remark || "无说明" }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="后置脚本">
+          <el-select v-model="form.post_scripts" multiple filterable collapse-tags style="width: 100%"
+                     placeholder="不引用 = 留空">
+            <el-option v-for="s in scriptOptions" :key="s.name" :value="s.name" :label="s.name">
+              <span class="opt-key">{{ s.name }}</span>
+              <span class="opt-val">{{ s.steps.length }} 步 · {{ s.remark || "无说明" }}</span>
+            </el-option>
+          </el-select>
+        </el-form-item>
 
         <div class="hint" style="margin: 14px 0 10px">
           <template v-if="mode === 'create'">保存后追加为 data/api_cases.xlsx 末行{{ copyFrom ? "（复制自 " + copyFrom + "，作为全新用例）" : "" }}；后端跑全文件格式校验，不通过不落盘。</template>

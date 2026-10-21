@@ -13,6 +13,7 @@ Python 3.10+ · requests · openpyxl · pytest · jsonpath-ng · pytest-html / a
 interface-auto/
 ├── config/config.yaml        # 环境配置（域名/超时/默认请求头/报告开关）
 ├── data/api_cases.xlsx       # 接口用例 Excel（用例/全局变量/填写说明 3 个 Sheet）
+├── data/scripts.json         # 公共脚本库（平台「公共脚本」页维护，已 gitignore）
 ├── core/                     # 核心引擎（纯逻辑，v2 页面版可直接复用）
 │   ├── excel_loader.py       # Excel 解析 + 格式校验（报错精确定位到行列）
 │   ├── context.py            # 变量池（提取值 > 全局变量表 > YAML 配置）
@@ -20,8 +21,9 @@ interface-auto/
 │   ├── http_client.py        # requests 封装（超时、报文快照）
 │   ├── extractor.py          # JSONPath 变量提取
 │   ├── asserts.py            # 断言引擎（10 种操作符）
+│   ├── scripts.py            # 公共脚本引擎（声明式步骤链的定义/校验/执行）
 │   ├── models.py             # 数据模型
-│   └── runner.py             # 单用例执行编排
+│   └── runner.py             # 单用例执行编排（含前后置脚本钩子）
 ├── tests/                    # pytest 参数化入口（保持 Excel 行顺序，保证接口依赖）
 ├── tools/gen_template.py     # 生成/重置 Excel 用例模板
 ├── main.py                   # CLI 入口
@@ -91,6 +93,8 @@ Excel 共 3 个 Sheet：**用例**（核心）、**全局变量**、**填写说�
 | 变量提取 | 否 | `{"变量名":"$.data.token"}`，从响应体按 JSONPath 提取 |
 | 断言 | 是 | JSON 数组，见下方断言语法 |
 | 超时(秒) | 否 | 正数，缺省用 config.yaml 的 timeout |
+| 前置脚本 | 否 | 逗号分隔的公共脚本名，在主请求之前按序执行 |
+| 后置脚本 | 否 | 逗号分隔的公共脚本名，无论主流程成败都在最后执行 |
 
 ### 断言语法
 
@@ -101,6 +105,7 @@ Excel 共 3 个 Sheet：**用例**（核心）、**全局变量**、**填写说�
 - `status_code` — 响应状态码
 - `response_text` — 响应原文
 - `$.xxx` — 响应体 JSONPath（`$` 为整个 body）
+- `var.xxx` — 变量池取值（如 `var.token`），用于不依赖响应的校验（前后置脚本里常用）
 
 **操作符**：
 
@@ -134,6 +139,34 @@ Excel 共 3 个 Sheet：**用例**（核心）、**全局变量**、**填写说�
 | get_profile_001 | GET | /api/profile | | `[["eq","status_code",200]]` |
 
 get_profile_001 的请求头写：`{"Authorization":"Bearer {{token}}"}`
+
+### 前后置公共脚本（登录/造数/清理复用）
+
+多个用例都要先登录、都要造数、都要收尾清理时，把这些重复动作沉淀成**公共脚本**，
+用例只在「前置脚本 / 后置脚本」列写脚本名（逗号分隔）即可引用。
+
+脚本是**声明式步骤链**，只有四种步骤动作（不执行任意代码，避开 RCE 与审计盲区）：
+
+| 动作 | 可用字段 | 用途 |
+|---|---|---|
+| `request` | `method` `url` `headers` `params` `body` `extract` `assert` `timeout` | 发一次请求，可提取变量、可带断言 |
+| `sleep` | `seconds` | 等待异步任务落库（单步上限 30 秒） |
+| `set_var` | `vars` | 写变量池，值支持 `{{变量}}` 占位符 |
+| `assert` | `assert` | 断言上一条响应，或 `var.xxx` 变量池 |
+
+执行语义：
+
+- **前置**任一步失败 → 用例直接判失败，**主请求不会发出**（避免脏数据打到被测系统）
+- **后置**在 `finally` 里执行，**主流程成败都会跑**（负责回收造出的数据）；后置失败同样判用例失败并提示「数据可能未清理」
+- 步骤写入的变量对该用例后续全部可用（与用例自身的 `变量提取` 同一个变量池）
+- 每条步骤的执行情况以「脚本轨迹」附件进报告，报告中可逐步回溯；变量名命中
+  `token/password/secret/key/auth/cookie` 时轨迹只留掩码，**敏感值不落盘**
+
+约束：单脚本最多 20 步；脚本名不能含逗号/空格/斜杠等（Excel 以逗号分隔引用）；
+定义与执行共用一套校验（`core/scripts.py`），存得下就跑得通。
+
+CLI 侧同样生效：脚本库存 `data/scripts.json`（路径可在 config.yaml 的 `scripts_file` 改），
+不引用脚本的存量用例文件即使没有这两列也完全不受影响。
 
 ## 运行参数
 
@@ -205,6 +238,8 @@ env:
 cd platform-web ; npm run dev
 # 权限全链路冒烟（需后端已启动）
 .venv\Scripts\python.exe tools\smoke_authz.py
+# 公共脚本冒烟（定义校验 + 引擎真打接口 + Excel 无损兼容 + 引用保护）
+.venv\Scripts\python.exe tools\smoke_scripts.py
 ```
 
 角色与权限矩阵（默认基线写在 `backend/perm_store.py`，可在「系统管理 → 角色权限」页勾选调整，自定义分配存 `data/permissions.json`）：
@@ -243,6 +278,11 @@ cd platform-web ; npm run dev
   **已登录会话无需重新登录即刻按新矩阵判定**（被收回权限者下一个请求即 403）；
   内置防锁死护栏：`user:manage`/`audit:manage` 强制保留给 admin，`run:create` 等关键码不允许全员为空，
   违反一律 400 并回具体原因；页面保存前展示人类可读的变更清单，每次变更自动落审计
+- 公共脚本页（「测试管理 → 公共脚本」，需 `script:manage`）：步骤链编辑器的表单直接由
+  `/api/scripts/meta` 渲染，动作与可用字段与后端校验同源（`core/scripts.py` 的 `ACTION_FIELDS`），
+  **不会出现「页面能填、执行不认」的口径漂移**；用例抽屉的「前置/后置脚本」只允许从脚本库选
+  （保存时后端校存在性，笔误当场拦下）；被用例引用的脚本**不可删除、不可改名**（409 并列出引用它的用例编号）；
+  引用列首次写值时会自动补 Excel 表头，无需手工重建文件；执行详情抽屉的「脚本轨迹」Tab 逐步展示成败与摘要
 
 ## 路线图
 
@@ -252,3 +292,5 @@ cd platform-web ; npm run dev
   - [x] v2 骨架：用例/场景/执行/报告/环境/凭证/通知/定时任务 + 登录与 RBAC 权限
   - [x] v2 审计：写操作与登录尝试留痕、脱敏落盘、筛选查询与 CSV 导出、超量自动裁剪
   - [x] v2 权限：角色权限矩阵可视化编辑（勾选即改，热生效 + 防锁死护栏 + 变更落审计）
+  - [x] v2 脚本：前后置公共脚本（声明式步骤链 + Excel 引用列 + 引用保护 + 报告脚本轨迹）
+  - [ ] v2 接口：接口定义管理（接口库沉淀 + OpenAPI 导入 + 由接口生成用例骨架）

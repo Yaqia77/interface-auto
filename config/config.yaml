@@ -5,6 +5,9 @@ default_env: test
 # 从 data/secret_vars_template.xlsx 复制为该文件名并填入真实值，程序运行时自动加载
 secret_vars_file: data/secret_vars.xlsx
 
+# 公共脚本库（前后置处理器，设计文档 2.4）：用例 Excel 的「前置脚本 / 后置脚本」列按名引用这里的脚本
+scripts_file: data/scripts.json
+
 # 环境配置：base_url 用于拼接用例中的相对路径；default_headers 与用例请求头合并（用例优先）
 env:
   test:

@@ -5,6 +5,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from . import scripts
 from .asserts import run_assertions
 from .extractor import extract_variables
 from .http_client import HttpExecutor, request_snapshot, response_snapshot
@@ -29,9 +30,11 @@ def setup_logging(level: str = "INFO") -> None:
 
 
 class CaseRunner:
-    """用例执行器：变量替换 -> 发请求 -> 变量提取 -> 断言。
+    """用例执行器：前置脚本 -> 变量替换 -> 发请求 -> 变量提取 -> 断言 -> 后置脚本。
 
     run() 不抛异常，执行结果（含失败详情）全部写入返回的 CaseResult。
+    后置脚本无论主流程成败都尝试执行（典型用途是清理造的数据，避免脏数据残留），
+    但后置失败会把用例判为失败并在错误信息里追加原因。
     """
 
     def __init__(self, executor: HttpExecutor, ctx):
@@ -41,6 +44,10 @@ class CaseRunner:
     def run(self, case: TestCase) -> CaseResult:
         result = CaseResult(case=case, ok=False)
         try:
+            # 0. 前置脚本（造数/登录取 token 等）：失败即中断，不发主请求
+            if case.pre_scripts:
+                scripts.run_scripts(case.pre_scripts, self.ctx, self.executor, "前置", result.script_trace)
+
             # 1. 变量替换（url / headers / params / body）
             url = render(case.url, self.ctx)
             headers = render(case.headers, self.ctx) if case.headers else None
@@ -65,11 +72,27 @@ class CaseRunner:
             result.ok = not failed
             if failed:
                 result.error = self._failure_message(case, result, failed)
+        except scripts.ScriptError as e:
+            result.ok = False
+            result.error = f"公共脚本执行失败: {e}"
+            logger.error("[{}] {}", case.case_id, result.error)
         except Exception as e:  # 请求异常 / 提取异常等
             result.ok = False
             result.error = f"用例执行异常: {type(e).__name__}: {e}"
             logger.error("[{}] {}", case.case_id, result.error)
+        finally:
+            # 5. 后置脚本（清理/回滚）：主流程失败也要跑
+            if case.post_scripts:
+                self._run_post_scripts(case, result)
         return result
+
+    def _run_post_scripts(self, case: TestCase, result: CaseResult) -> None:
+        try:
+            scripts.run_scripts(case.post_scripts, self.ctx, self.executor, "后置", result.script_trace)
+        except scripts.ScriptError as e:
+            result.ok = False
+            result.error = (result.error + "\n" if result.error else "") + f"后置脚本执行失败（数据可能未清理）: {e}"
+            logger.error("[{}] {}", case.case_id, result.error)
 
     @staticmethod
     def _failure_message(case: TestCase, result: CaseResult, failed: list) -> str:

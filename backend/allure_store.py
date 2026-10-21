@@ -197,6 +197,7 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
             "trace": mask_text((r.get("statusDetails") or {}).get("trace", ""))[:2000],
             "request": None,
             "response": None,
+            "scripts": [],
         }
         src = _find_attachment(r, "请求")
         if src and (results_dir / src).exists():
@@ -211,5 +212,8 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
             detail["response"] = mask_obj(resp)
         asserts = _load_json_attachment(results_dir, r, "断言")
         detail["assertions"] = mask_obj(asserts) if isinstance(asserts, list) else None
+        # 公共脚本执行轨迹（前置/后置逐步结果）：未引用脚本的用例该字段为空列表
+        trace = _load_json_attachment(results_dir, r, "脚本轨迹")
+        detail["scripts"] = mask_obj(trace) if isinstance(trace, list) else []
         return detail
     return None

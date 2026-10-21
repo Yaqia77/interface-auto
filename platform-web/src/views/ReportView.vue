@@ -644,6 +644,34 @@ watch(runId, () => load());
             />
             <div v-if="detail.error" class="fail-line mono">{{ detail.error.split("\n")[0] }}</div>
           </el-tab-pane>
+          <el-tab-pane v-if="detail.scripts && detail.scripts.length" label="脚本轨迹" name="script">
+            <div class="dim" style="margin-bottom: 8px">
+              前置脚本任一步失败即中断（不发主请求）；后置脚本无论主流程成败都会执行。token/password 类变量值已掩码。
+            </div>
+            <el-table :data="detail.scripts" size="small">
+              <el-table-column prop="phase" label="阶段" width="60" />
+              <el-table-column label="脚本 · 步序" min-width="160">
+                <template #default="{ row }">
+                  <span class="mono">{{ row.script }}</span>
+                  <span class="case-name"> 第 {{ row.index }} 步</span>
+                </template>
+              </el-table-column>
+              <el-table-column prop="action" label="动作" width="90">
+                <template #default="{ row }"><span class="mono">{{ row.action }}</span></template>
+              </el-table-column>
+              <el-table-column label="结果" width="60">
+                <template #default="{ row }">
+                  <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? "✓" : "✗" }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="摘要 / 失败原因" min-width="240">
+                <template #default="{ row }">
+                  <div v-if="row.desc" class="case-name">{{ row.desc }}</div>
+                  <div :class="row.ok ? 'txt-ok' : 'txt-fail'" style="font-size: 12px">{{ row.detail }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
           <el-tab-pane label="日志" name="log">
             <div v-if="detail.error" class="fail-line mono" style="margin-top: 0">{{ detail.error }}</div>
             <pre v-if="detail.trace" class="json" style="max-height: 360px">{{ detail.trace }}</pre>

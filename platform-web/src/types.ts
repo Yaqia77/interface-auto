@@ -15,6 +15,8 @@ export interface CaseItem {
   extract: Record<string, string> | null;
   asserts: string[][] | null;
   timeout: number | null;
+  pre_scripts: string[];
+  post_scripts: string[];
   source: string;
   row: number;
 }
@@ -120,6 +122,19 @@ export interface RunCaseDetail {
   request: Record<string, unknown> | null;
   response: Record<string, unknown> | null;
   assertions: AssertResult[] | null;
+  /** 前后置公共脚本执行轨迹（无脚本时为空数组） */
+  scripts: ScriptTraceItem[];
+}
+
+/** 脚本单步执行轨迹（敏感变量值由后端掩码后才落报告） */
+export interface ScriptTraceItem {
+  script: string;
+  phase: string;      // 前置 | 后置
+  index: number;
+  action: string;
+  desc: string;
+  ok: boolean;
+  detail: string;
 }
 
 /** 凭证变量（/api/secrets）：后端仅回掩码值，绝不透传明文 */
@@ -324,4 +339,63 @@ export interface PermSaveResp {
   matrix: Record<string, string[]>;
   changed: string[];
   actor_permissions: string[];
+}
+
+/** 公共脚本（设计文档 2.4）：声明式步骤链，动作白名单由 /api/scripts/meta 下发 */
+export interface ScriptStep {
+  action: string;
+  desc?: string;
+  /* request */
+  method?: string;
+  url?: string;
+  headers?: Record<string, unknown>;
+  params?: Record<string, unknown>;
+  body?: unknown;
+  extract?: Record<string, string>;
+  assert?: unknown[][];
+  timeout?: number;
+  /* sleep */
+  seconds?: number;
+  /* set_var */
+  vars?: Record<string, unknown>;
+}
+
+export interface ScriptItem {
+  name: string;
+  remark: string;
+  steps: ScriptStep[];
+  used_by: string[];
+  updated_at: string;
+}
+
+export interface ScriptCreateReq {
+  name: string;
+  remark?: string;
+  steps: ScriptStep[];
+}
+
+export interface ScriptUpdateReq {
+  name?: string;
+  remark?: string;
+  steps?: ScriptStep[];
+}
+
+export interface ScriptActionMeta {
+  action: string;
+  desc: string;
+  fields: string[];
+}
+
+/** 步骤编辑器元数据：表单字段与后端校验同一份来源，杜绝口径漂移 */
+export interface ScriptMeta {
+  actions: ScriptActionMeta[];
+  step_limit: number;
+  sleep_limit: number;
+  name_max: number;
+  name_forbidden: string;
+  methods: string[];
+  assert_ops: string[];
+  ops_need_expected: string[];
+  path_options: { path: string; desc: string }[];
+  variables: string[];
 }

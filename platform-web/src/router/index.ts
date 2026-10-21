@@ -37,6 +37,12 @@ const router = createRouter({
       meta: { title: "测试场景" },
     },
     {
+      path: "/scripts",
+      name: "scripts",
+      component: () => import("../views/ScriptsView.vue"),
+      meta: { title: "公共脚本", perm: "script:manage" },
+    },
+    {
       path: "/execution",
       name: "execution",
       component: () => import("../views/ExecutionView.vue"),

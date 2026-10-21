@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from backend import authz, excel_writer
 from backend.excel_writer import CaseWriteError
 from backend.schemas import CaseCreate, CaseOut, CasePage, CaseUpdate
-from core import excel_loader
+from core import excel_loader, scripts as core_scripts
 from core.excel_loader import CASE_COLUMNS, ExcelFormatError
 
 ROOT = Path(__file__).resolve().parents[2]  # 项目根（backend/routers/ 上溯两级）
@@ -170,6 +170,9 @@ def export_cases(
             v = getattr(c, f, None)
             if f == "run":
                 row.append("Y" if v else "N")
+            elif f in ("pre_scripts", "post_scripts"):
+                # 脚本引用列：列表 → 逗号分隔单元格文本（与 loader 拆分口径无损往返）
+                row.append(excel_loader.join_refs(v) if v else None)
             elif f in ("headers", "params", "extract", "asserts"):
                 row.append(json.dumps(v, ensure_ascii=False) if v else None)
             elif f == "body":
@@ -211,12 +214,25 @@ def get_case(case_id: str, file: str = Query(default="data/api_cases.xlsx")):
 _ERROR_STATUS = {"invalid": 400, "not_found": 404, "conflict": 409, "locked": 409}
 
 
+def _check_script_refs(pre, post) -> None:
+    """用例引用的脚本必须已存在：笔误在保存时就拦下，而不是等执行时报错。"""
+    names = [str(n).strip() for n in list(pre or []) + list(post or []) if str(n).strip()]
+    if not names:
+        return
+    library = core_scripts.load_scripts()
+    missing = sorted({n for n in names if n not in library})
+    if missing:
+        raise HTTPException(status_code=400,
+                            detail=f"公共脚本不存在: {', '.join(missing)}（请先到「公共脚本」页创建，或修正引用）")
+
+
 @router.post("", response_model=CaseOut, summary="新增用例（追加行写回 Excel）", status_code=201)
 def create_case(body: CaseCreate, file: str = Query(default="data/api_cases.xlsx"),
                 _: dict = Depends(authz.require_perm("case:write"))):
     path = _resolve_file(file)
     if path.is_dir():
         raise HTTPException(status_code=400, detail="目录模式下无法确定新增目标文件，请指定具体 xlsx")
+    _check_script_refs(body.pre_scripts, body.post_scripts)
     data = body.model_dump()
     try:
         excel_writer.append_case(path, data)
@@ -303,6 +319,7 @@ def update_case(case_id: str, body: CaseUpdate, file: str = Query(default="data/
     # 真实写入文件：目录模式下用用例自身的 source 定位到具体 xlsx
     target_file = (path / target.source) if path.is_dir() else path
     changes = body.model_dump(exclude_unset=True)
+    _check_script_refs(changes.get("pre_scripts"), changes.get("post_scripts"))
     try:
         excel_writer.apply_update(target_file, case_id, target.row, changes)
     except CaseWriteError as e:

@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp } from "../types";
+import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -254,6 +254,24 @@ export const api = {
         { headers: { "Content-Type": "multipart/form-data" }, timeout: 60000 })
       .then((r) => r.data);
   },
+
+  /* ---------- 公共脚本（设计文档 2.4：前后置声明式步骤链） ---------- */
+  listScripts: () => http.get<ScriptItem[]>("/scripts").then((r) => r.data),
+
+  /** 步骤编辑器元数据：动作白名单与字段上限（与后端校验同源） */
+  getScriptMeta: () => http.get<ScriptMeta>("/scripts/meta").then((r) => r.data),
+
+  getScript: (name: string) =>
+    http.get<ScriptItem>(`/scripts/${encodeURIComponent(name)}`).then((r) => r.data),
+
+  createScript: (body: ScriptCreateReq) =>
+    http.post<ScriptItem>("/scripts", body).then((r) => r.data),
+
+  updateScript: (name: string, body: ScriptUpdateReq) =>
+    http.put<ScriptItem>(`/scripts/${encodeURIComponent(name)}`, body).then((r) => r.data),
+
+  deleteScript: (name: string) =>
+    http.delete<{ deleted: string }>(`/scripts/${encodeURIComponent(name)}`).then((r) => r.data),
 
   /* ---------- Webhook 通知管理 ---------- */
   listWebhooks: () => http.get<WebhookItem[]>("/webhooks").then((r) => r.data),

@@ -21,6 +21,8 @@ class CaseOut(BaseModel):
     extract: dict | None = None
     asserts: list | None = None
     timeout: float | None = None
+    pre_scripts: list[str] = Field(default_factory=list, description="前置公共脚本名（Excel 逗号分隔列）")
+    post_scripts: list[str] = Field(default_factory=list, description="后置公共脚本名")
     source: str = Field(description="来源 Excel 文件名")
     row: int = Field(description="来源 Excel 行号")
 
@@ -46,6 +48,8 @@ class CaseUpdate(BaseModel):
     extract: dict | None = None
     asserts: list | None = Field(default=None, description="[[操作符, 取值路径, 期望值], ...]")
     timeout: float | None = Field(default=None, description="秒，正数；传 null 清空用 exclude 控制")
+    pre_scripts: list[str] | None = Field(default=None, description="前置公共脚本名列表（写回「前置脚本」列，逗号分隔）")
+    post_scripts: list[str] | None = Field(default=None, description="后置公共脚本名列表")
 
 
 class CaseCreate(BaseModel):
@@ -65,6 +69,8 @@ class CaseCreate(BaseModel):
     body: Any = None
     extract: dict | None = None
     timeout: float | None = None
+    pre_scripts: list[str] | None = Field(default=None, description="前置公共脚本名列表")
+    post_scripts: list[str] | None = Field(default=None, description="后置公共脚本名列表")
 
 
 class RunCreate(BaseModel):
@@ -288,3 +294,33 @@ class PermMatrixUpdate(BaseModel):
     matrix: dict[str, list[str]] = Field(
         description='权限码 -> 角色列表，如 {"case:write": ["admin","tl","qa"], "user:manage": ["admin"]}',
     )
+
+
+# ==================== 公共脚本（前后置处理器，设计文档 2.4） ====================
+
+
+class ScriptCreate(BaseModel):
+    """新建公共脚本（步骤为声明式定义，动作白名单见 core/scripts.py）。"""
+
+    name: str = Field(description="脚本名（唯一；不能含逗号/空格，用例按名引用）")
+    remark: str = Field(default="", description="用途说明")
+    steps: list[dict[str, Any]] = Field(
+        description="步骤链，每步 {action, ...}，action 取 request/sleep/set_var/assert")
+
+
+class ScriptUpdate(BaseModel):
+    """更新脚本（只传改动字段；已被引用的脚本改名会被拦下）。"""
+
+    name: str | None = None
+    remark: str | None = None
+    steps: list[dict[str, Any]] | None = None
+
+
+class ScriptOut(BaseModel):
+    """脚本对外视图（附引用它的用例编号，供页面做引用保护提示）。"""
+
+    name: str
+    remark: str = ""
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    used_by: list[str] = Field(default_factory=list, description="引用该脚本的用例编号")
+    updated_at: str = ""

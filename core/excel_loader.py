@@ -26,6 +26,8 @@ CASE_COLUMNS = {
     "变量提取": "extract",
     "断言": "asserts",
     "超时(秒)": "timeout",
+    "前置脚本": "pre_scripts",
+    "后置脚本": "post_scripts",
 }
 REQUIRED_HEADERS = ["用例编号", "模块", "接口名称", "用例描述", "优先级", "是否执行", "请求方式", "请求路径", "断言"]
 VALID_METHODS = {"GET", "POST", "PUT", "DELETE", "PATCH"}
@@ -38,6 +40,25 @@ RUN_FALSE = {"N", "NO", "FALSE", "否"}
 
 class ExcelFormatError(Exception):
     """Excel 内容/格式不合法，message 中包含全部错误的精确位置。"""
+
+
+def split_refs(cell) -> list:
+    """脚本引用单元格 → 脚本名列表（中英文逗号分隔，去空白去重保序）。"""
+    if cell in (None, ""):
+        return []
+    text = cell if isinstance(cell, str) else str(cell)
+    out: list[str] = []
+    for part in text.replace("，", ",").split(","):
+        name = part.strip()
+        if name and name not in out:
+            out.append(name)
+    return out
+
+
+def join_refs(names) -> str | None:
+    """脚本名列表 → 单元格文本（写回 Excel 用）。"""
+    cleaned = split_refs(",".join(str(n) for n in (names or []) if str(n).strip()))
+    return ",".join(cleaned) or None
 
 
 class LoadResult:
@@ -216,6 +237,10 @@ def _parse_case(file_name, row_no, raw, field_to_col, seen_ids, errors):
     if not ok_so_far:
         return None  # 该行已有 JSON 相关错误，跳过
 
+    # 前置/后置脚本：表头为可选列，缺失时为 None（存量文件零影响）；单元格为逗号分隔的脚本名
+    pre_scripts = split_refs(raw.get("pre_scripts"))
+    post_scripts = split_refs(raw.get("post_scripts"))
+
     return TestCase(
         row=row_no,
         source=file_name,
@@ -233,6 +258,8 @@ def _parse_case(file_name, row_no, raw, field_to_col, seen_ids, errors):
         extract=extract,
         asserts=asserts,
         timeout=timeout,
+        pre_scripts=pre_scripts,
+        post_scripts=post_scripts,
     )
 
 

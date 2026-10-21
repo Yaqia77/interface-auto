@@ -40,6 +40,15 @@ def test_api(api_case, executor, context, dep_map, case_results):
     result.duration = time.perf_counter() - start
 
     if HAS_ALLURE:
+        if result.script_trace:
+            _attach_scripts(result.script_trace)
+        tags = []
+        if api_case.pre_scripts:
+            tags.append("前置脚本:" + ",".join(api_case.pre_scripts))
+        if api_case.post_scripts:
+            tags.append("后置脚本:" + ",".join(api_case.post_scripts))
+        if tags:
+            allure.dynamic.tag(*tags)
         if result.request_snapshot:
             _attach(result.request_snapshot, f"请求报文 {api_case.method} {api_case.url}")
         if result.response_snapshot:
@@ -78,5 +87,14 @@ def _attach_assertions(assertions):
     allure.attach(
         json.dumps(rows, ensure_ascii=False, indent=2, default=str),
         name="断言结果",
+        attachment_type=allure.attachment_type.JSON,
+    )
+
+
+def _attach_scripts(trace):
+    """公共脚本执行轨迹（前置/后置逐步结果），供平台报告详情与 Allure 附件回溯。"""
+    allure.attach(
+        json.dumps(trace, ensure_ascii=False, indent=2, default=str),
+        name="脚本轨迹",
         attachment_type=allure.attachment_type.JSON,
     )
