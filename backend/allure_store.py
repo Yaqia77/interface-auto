@@ -215,5 +215,19 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
         # 公共脚本执行轨迹（前置/后置逐步结果）：未引用脚本的用例该字段为空列表
         trace = _load_json_attachment(results_dir, r, "脚本轨迹")
         detail["scripts"] = mask_obj(trace) if isinstance(trace, list) else []
+        # UI 步骤轨迹：接口用例无此附件返回 None；截图附件名解析为 allure source 文件名供前端取图
+        detail["ui_steps"] = _ui_steps(results_dir, r)
         return detail
     return None
+
+
+def _ui_steps(results_dir: Path, result: dict):
+    """从 allure-results 读取「UI步骤」附件并回填每步截图的可访问文件名。"""
+    steps = _load_json_attachment(results_dir, result, "UI步骤")
+    if not isinstance(steps, list):
+        return None
+    att_map = {a.get("name"): a.get("source") for a in result.get("attachments", [])}
+    for s in steps:
+        if isinstance(s, dict) and s.get("screenshot"):
+            s["screenshot_source"] = att_map.get(s["screenshot"])
+    return mask_obj(steps)

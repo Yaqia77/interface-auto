@@ -49,7 +49,13 @@ def main() -> None:
     report_dir = ROOT / "reports" / f"run_{ts}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    pytest_args = [str(ROOT / "tests"), "-v", "--tb=short"]
+    # 按用例文件类型分流收集：.json → UI 链路（test_ui），其余 → 接口链路（test_api）。
+    # 显式指定单个测试文件，避免两类收集器在同一批次互相干扰（api 收集器会误读 json）。
+    if file_arg.suffix.lower() == ".json":
+        test_target = str(ROOT / "tests" / "test_ui.py")
+    else:
+        test_target = str(ROOT / "tests" / "test_api.py")
+    pytest_args = [test_target, "-v", "--tb=short"]
     if args.env:
         pytest_args += [f"--env={args.env}"]
     pytest_args += [f"--file={file_arg}"]

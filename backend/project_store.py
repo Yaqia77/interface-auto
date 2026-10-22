@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
-from backend import case_template
+from backend import case_template, ui_case_store
 from core import excel_loader
 
 ROOT = Path(__file__).resolve().parent.parent  # backend/ 的上级 = 项目根
@@ -22,6 +22,9 @@ _LOCK = threading.Lock()
 
 DEFAULT_ID = "default"
 DEFAULT_FILE = "data/api_cases.xlsx"   # 存量用例文件，原地作为默认项目，不迁移
+
+KIND_API = "api"
+KIND_UI = "ui"
 
 
 class ProjectError(Exception):
@@ -62,6 +65,7 @@ def _default_entry() -> dict:
         "name": "默认项目",
         "desc": "存量用例（data/api_cases.xlsx），框架演示用例所在地",
         "file": DEFAULT_FILE,
+        "kind": KIND_API,
         "builtin": True,
         "created_at": now,
         "updated_at": now,
@@ -77,11 +81,16 @@ def _ensure_default(data: dict) -> bool:
 
 
 def _count_cases(rel_file: str) -> int:
-    """读取项目文件统计用例数；文件缺失/格式异常/空表都记 0，绝不因计数拖垮列表接口。"""
+    """读取项目文件统计用例数；文件缺失/格式异常/空表都记 0，绝不因计数拖垮列表接口。
+
+    按扩展名分流：.json → UI 用例库；其余 → 接口 Excel（存量口径不变）。
+    """
     try:
         p = ROOT / rel_file
         if not p.exists():
             return 0
+        if rel_file.lower().endswith(".json"):
+            return len(ui_case_store.load_cases(p))
         return len(excel_loader.load(p, allow_empty=True).cases)
     except Exception:  # noqa: BLE001（计数是尽力而为的展示信息）
         return 0
@@ -120,7 +129,7 @@ def _name_taken(data: dict, name: str, exclude_id: str = "") -> bool:
     )
 
 
-def create(name: str, desc: str = "") -> dict:
+def create(name: str, desc: str = "", kind: str = KIND_API) -> dict:
     name = (name or "").strip()
     if not name:
         raise ProjectError("invalid", "项目名称不能为空")
@@ -128,8 +137,12 @@ def create(name: str, desc: str = "") -> dict:
         raise ProjectError("invalid", "项目名称过长（≤40 字）")
     if any(c in name for c in "/\\?#"):
         raise ProjectError("invalid", "项目名称不能含 / \\ ? # 等字符")
+    kind = (kind or KIND_API).strip().lower()
+    if kind not in (KIND_API, KIND_UI):
+        raise ProjectError("invalid", "项目类型只能是 api 或 ui")
     pid = f"proj_{uuid.uuid4().hex[:8]}"
-    rel_file = f"data/cases/{pid}.xlsx"
+    ext = ".json" if kind == KIND_UI else ".xlsx"
+    rel_file = f"data/cases/{pid}{ext}"
     abs_file = ROOT / rel_file
     with _LOCK:
         data = _load()
@@ -138,14 +151,18 @@ def create(name: str, desc: str = "") -> dict:
             raise ProjectError("conflict", f"项目名称已存在: {name}")
         # 先脚手架文件再登记：写失败则注册表不留孤儿项
         abs_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(abs_file, "wb") as fp:
-            fp.write(case_template.build_empty_project_bytes().read())
+        if kind == KIND_UI:
+            ui_case_store.scaffold(abs_file)
+        else:
+            with open(abs_file, "wb") as fp:
+                fp.write(case_template.build_empty_project_bytes().read())
         now = _now()
         entry = {
             "id": pid,
             "name": name,
             "desc": (desc or "").strip(),
             "file": rel_file,
+            "kind": kind,
             "builtin": False,
             "created_at": now,
             "updated_at": now,

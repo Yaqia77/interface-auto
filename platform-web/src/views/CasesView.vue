@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, Project, ScriptItem } from "../types";
 import JsonViewer from "../components/JsonViewer.vue";
+import UiCasesView from "./UiCasesView.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -35,6 +36,9 @@ const currentProject = computed(() =>
 /** 所有用例接口都要透传的 file 参数；兜底默认项目的存量文件路径 */
 const currentFile = computed(() => currentProject.value?.file ?? "data/api_cases.xlsx");
 
+/** 项目形态：ui=可视化步骤用例（交 UiCasesView），api=接口 Excel 用例（本页原有形态） */
+const isUi = computed(() => currentProject.value?.kind === "ui");
+
 async function loadProjects() {
   try { projects.value = await api.listProjects(); } catch { /* 拦截器已提示 */ }
   // 记住的项目可能已被删除/无权访问，兜底回默认项目，避免切换器空选
@@ -50,13 +54,14 @@ function projectLabel(p: Project) {
 /* ---------- 项目管理：新建 / 重命名·说明 / 删除（builtin 默认项目禁删） ---------- */
 const projDlgVisible = ref(false);
 const projSaving = ref(false);
-const projForm = reactive({ name: "", desc: "" });
+const projForm = reactive({ name: "", desc: "", kind: "api" as "api" | "ui" });
 const projEditingId = ref("");   // "" = 新建；否则为待更新项目 id
 
 function openProjCreate() {
   projEditingId.value = "";
   projForm.name = "";
   projForm.desc = "";
+  projForm.kind = "api";
   projDlgVisible.value = true;
 }
 
@@ -78,7 +83,7 @@ async function saveProj() {
       await api.updateProject(projEditingId.value, { name, desc: projForm.desc.trim() });
       ElMessage.success("项目已更新");
     } else {
-      const item = await api.createProject({ name, desc: projForm.desc.trim() });
+      const item = await api.createProject({ name, desc: projForm.desc.trim(), kind: projForm.kind });
       ElMessage.success(`项目「${item.name}」已创建，可切换过去新建用例`);
     }
     projDlgVisible.value = false;
@@ -171,7 +176,7 @@ watch(activeProjectId, (v) => {
   activeModule.value = "";
   currentPage.value = 1;
   search();
-  api.getCaseMeta(currentFile.value).then((m) => (meta.value = m)).catch(() => { /* 拦截器已提示 */ });
+  if (!isUi.value) api.getCaseMeta(currentFile.value).then((m) => (meta.value = m)).catch(() => { /* 拦截器已提示 */ });
 });
 
 /* ================= 模块导航 + 整体分页（左侧选模块，右侧分页表格） ================= */
@@ -207,6 +212,7 @@ function selectModule(name: string) {
 }
 
 async function search() {
+  if (isUi.value) { cases.value = []; total.value = 0; return; }  // UI 项目由 UiCasesView 自行拉取
   loading.value = true;
   try {
     const resp = await api.listCases({
@@ -967,7 +973,7 @@ onMounted(async () => {
   }
   await loadProjects();   // 先确定当前项目，再按其文件拉用例
   search();
-  try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ }
+  if (!isUi.value) { try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ } }
   loadScripts();
   loadApiDefs();
   await nextTick();
@@ -983,7 +989,7 @@ onMounted(async () => {
       <el-select v-model="activeProjectId" style="width: 100%" :loading="!projects.length">
         <el-option v-for="p in projects" :key="p.id" :value="p.id" :label="projectLabel(p)">
           <span class="opt-key">{{ p.name }}{{ p.builtin ? " ⭐" : "" }}</span>
-          <span class="opt-val">{{ p.case_count }} 条</span>
+          <span class="opt-val">{{ p.kind === "ui" ? "UI" : "接口" }} · {{ p.case_count }} 条</span>
         </el-option>
       </el-select>
       <div class="proj-file mono" :title="currentFile">{{ currentFile }}</div>
@@ -993,7 +999,8 @@ onMounted(async () => {
         <el-button v-if="currentProject" v-perm="'case:write'" link type="primary" size="small" @click="openProjEdit">重命名</el-button>
         <el-button v-if="currentProject && !currentProject.builtin" v-perm="'case:delete'" link type="danger" size="small" @click="removeProject">删除</el-button>
       </div>
-      <el-divider style="margin: 10px 0" />
+      <el-divider v-if="!isUi" style="margin: 10px 0" />
+      <template v-if="!isUi">
       <div class="mod-panel-head">模块</div>
       <ul class="mod-list">
         <li :class="{ active: activeModule === '' }" @click="selectModule('')">
@@ -1005,10 +1012,11 @@ onMounted(async () => {
           <span class="mod-cnt">{{ m.count }}</span>
         </li>
       </ul>
+      </template>
     </el-card>
 
-    <!-- 右侧：筛选 + 整体分页表格 -->
-    <div class="case-body">
+    <!-- 右侧：接口项目走原有筛选 + 分页表格；UI 项目整体交给 UiCasesView（自包含拉取/编辑） -->
+    <div v-if="!isUi" class="case-body">
       <el-alert
         v-if="carried"
         type="warning"
@@ -1147,6 +1155,7 @@ onMounted(async () => {
         </div>
       </el-card>
     </div>
+    <UiCasesView v-else :file="currentFile" :project="currentProject" :projects="projects" @projects-changed="loadProjects" />
 
     <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
     <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? (copyFrom ? '复制新增用例' : '新增用例') : `编辑用例 ${editing?.case_id ?? ''}`">
@@ -1442,13 +1451,20 @@ onMounted(async () => {
         <el-form-item label="名称">
           <el-input v-model="projForm.name" maxlength="40" placeholder="被测系统名，如：订单中心" />
         </el-form-item>
+        <el-form-item v-if="!projEditingId" label="类型">
+          <el-radio-group v-model="projForm.kind">
+            <el-radio value="api">接口用例</el-radio>
+            <el-radio value="ui">UI 用例</el-radio>
+          </el-radio-group>
+          <div class="hint" style="margin: 4px 0 0">创建后不可改：接口用例基于 Excel，UI 用例基于可视化步骤（JSON）。</div>
+        </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="projForm.desc" type="textarea" :rows="2" placeholder="选填：项目用途、负责人等" />
         </el-form-item>
       </el-form>
       <div class="hint" style="margin: 0">
         <template v-if="projEditingId">项目文件路径不可变，重命名不影响定时任务/场景引用。</template>
-        <template v-else>新建会在 data/cases/ 下生成一张空用例表（仅表头），切换到该项目后即可新增/导入用例；不同项目的模块彼此隔离。</template>
+        <template v-else>新建会在 data/cases/ 下生成一张空用例载体（{{ projForm.kind === "ui" ? "JSON 步骤表" : "Excel（仅表头）" }}），切换到该项目后即可新增用例；不同项目的模块彼此隔离。</template>
       </div>
       <template #footer>
         <el-button @click="projDlgVisible = false">取消</el-button>

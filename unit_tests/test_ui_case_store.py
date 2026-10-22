@@ -1,0 +1,243 @@
+# -*- coding: utf-8 -*-
+"""backend.ui_case_store 单元测试：校验 / 查重 / 原子写 / 增删改查 / 迁移。
+
+与执行用例（tests/ 目录，由 main.py 收集）隔离：本目录用 pytest 直接跑，
+不进平台执行批次，不污染 allure 报告。
+    .venv/Scripts/python.exe -m pytest unit_tests/test_ui_case_store.py -v
+"""
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from backend import ui_case_store as store  # noqa: E402
+from backend.ui_case_store import UiCaseError  # noqa: E402
+
+
+def _case(cid="ui_login_001", **over):
+    base = {
+        "case_id": cid, "module": "登录", "name": "用户登录",
+        "desc": "验证账号密码登录成功", "priority": "P0", "run": True,
+        "browser": "chromium", "headless": True,
+        "steps": [
+            {"action": "goto", "value": "/login"},
+            {"action": "fill", "locator": "css=#username", "value": "{{username}}"},
+            {"action": "click", "locator": "css=button[type=submit]"},
+            {"action": "expect_text", "locator": "css=.welcome", "value": "欢迎"},
+        ],
+        "extract": [{"var": "order_id", "source": "text|css=.order-id"}],
+    }
+    base.update(over)
+    return base
+
+
+@pytest.fixture
+def case_file(tmp_path):
+    p = tmp_path / "cases.json"
+    store.scaffold(p)
+    return p
+
+
+# ==================== 校验 ====================
+
+def test_validate_ok_normalizes():
+    c = store.validate_case(_case())
+    assert c["case_id"] == "ui_login_001"
+    assert c["priority"] == "P0"
+    assert c["browser"] == "chromium"
+    assert c["headless"] is True
+    assert len(c["steps"]) == 4
+    assert c["steps"][0] == {"action": "goto", "desc": "", "value": "/login"}
+    assert c["extract"] == [{"var": "order_id", "source": "text|css=.order-id"}]
+
+
+def test_validate_empty_id_rejected():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(case_id="  "))
+    assert e.value.kind == "invalid"
+
+
+def test_validate_bad_priority():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(priority="PX"))
+    assert e.value.kind == "invalid"
+
+
+def test_validate_bad_action():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(steps=[{"action": "fly", "locator": "css=#a"}]))
+    assert e.value.kind == "invalid"
+
+
+def test_validate_step_missing_locator():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(steps=[{"action": "click"}]))
+    assert "定位器" in str(e.value)
+
+
+def test_validate_step_missing_value():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(steps=[{"action": "fill", "locator": "css=#a"}]))
+    assert e.value.kind == "invalid"
+
+
+def test_validate_no_steps():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(steps=[]))
+    assert "至少需要一个步骤" in str(e.value)
+
+
+def test_validate_bad_browser():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(browser="ie"))
+    assert e.value.kind == "invalid"
+
+
+def test_validate_bad_extract():
+    with pytest.raises(UiCaseError) as e:
+        store.validate_case(_case(extract=[{"var": "x"}]))
+    assert e.value.kind == "invalid"
+
+
+# ==================== 查询 ====================
+
+def test_load_cases_missing_file_returns_empty(tmp_path):
+    assert store.load_cases(tmp_path / "nope.json") == []
+
+
+def test_scaffold_creates_empty(tmp_path):
+    p = tmp_path / "n.json"
+    store.scaffold(p)
+    assert store.load_cases(p) == []
+    assert json.loads(p.read_text(encoding="utf-8")) == {"version": 1, "cases": []}
+
+
+# ==================== 增删改查 + 查重 ====================
+
+def test_create_and_get(case_file):
+    created = store.create_case(case_file, _case())
+    assert created["case_id"] == "ui_login_001"
+    got = store.get_case(case_file, "ui_login_001")
+    assert got is not None and got["name"] == "用户登录"
+    assert store.get_case(case_file, "missing") is None
+
+
+def test_create_duplicate_rejected(case_file):
+    store.create_case(case_file, _case())
+    with pytest.raises(UiCaseError) as e:
+        store.create_case(case_file, _case())
+    assert e.value.kind == "conflict"
+    # 查重失败不应污染已有数据
+    assert len(store.load_cases(case_file)) == 1
+
+
+def test_update_changes_fields(case_file):
+    store.create_case(case_file, _case())
+    updated = store.update_case(case_file, "ui_login_001", {"priority": "P1", "name": "改名"})
+    assert updated["priority"] == "P1" and updated["name"] == "改名"
+    assert updated["case_id"] == "ui_login_001"  # case_id 不可改
+
+
+def test_update_missing_case(case_file):
+    with pytest.raises(UiCaseError) as e:
+        store.update_case(case_file, "ghost", {"priority": "P1"})
+    assert e.value.kind == "not_found"
+
+
+def test_update_invalid_not_persisted(case_file):
+    store.create_case(case_file, _case())
+    with pytest.raises(UiCaseError):
+        store.update_case(case_file, "ui_login_001", {"priority": "BAD"})
+    # 非法改动不落盘：原优先级仍在
+    assert store.get_case(case_file, "ui_login_001")["priority"] == "P0"
+
+
+def test_delete_case(case_file):
+    store.create_case(case_file, _case())
+    store.delete_case(case_file, "ui_login_001")
+    assert store.load_cases(case_file) == []
+    with pytest.raises(UiCaseError) as e:
+        store.delete_case(case_file, "ui_login_001")
+    assert e.value.kind == "not_found"
+
+
+# ==================== 筛选 ====================
+
+def test_list_cases_filters(case_file):
+    store.create_case(case_file, _case("ui_a", module="登录", priority="P0"))
+    store.create_case(case_file, _case("ui_b", module="下单", priority="P2", run=False))
+    assert {c["case_id"] for c in store.list_cases(case_file)} == {"ui_a", "ui_b"}
+    assert {c["case_id"] for c in store.list_cases(case_file, module="登录")} == {"ui_a"}
+    assert {c["case_id"] for c in store.list_cases(case_file, priority="P0,P2")} == {"ui_a", "ui_b"}
+    assert {c["case_id"] for c in store.list_cases(case_file, run=True)} == {"ui_a"}
+    assert {c["case_id"] for c in store.list_cases(case_file, keyword="ui_b")} == {"ui_b"}
+
+
+# ==================== 原子写 ====================
+
+def test_invalid_create_does_not_write(case_file):
+    with pytest.raises(UiCaseError):
+        store.create_case(case_file, _case(steps=[{"action": "fly"}]))
+    assert store.load_cases(case_file) == []
+    # 无残留临时文件
+    assert not list(case_file.parent.glob("*.tmp"))
+
+
+def test_corrupt_json_readable_error(case_file):
+    case_file.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(UiCaseError) as e:
+        store.load_cases(case_file)
+    assert e.value.kind == "invalid"
+
+
+# ==================== 迁移 ====================
+
+def test_move_between_projects(tmp_path):
+    src = tmp_path / "src.json"
+    dst = tmp_path / "dst.json"
+    store.scaffold(src)
+    store.scaffold(dst)
+    store.create_case(src, _case("ui_m1", module="源模块"))
+    moved = store.move_case(src, dst, "ui_m1", new_module="目标模块")
+    assert moved["module"] == "目标模块"
+    assert store.load_cases(src) == []
+    assert [c["case_id"] for c in store.load_cases(dst)] == ["ui_m1"]
+
+
+def test_move_same_project_rejected(tmp_path):
+    p = tmp_path / "one.json"
+    store.scaffold(p)
+    store.create_case(p, _case("ui_x"))
+    with pytest.raises(UiCaseError) as e:
+        store.move_case(p, p, "ui_x")
+    assert e.value.kind == "invalid"
+
+
+def test_move_conflict_target_has_id(tmp_path):
+    src = tmp_path / "src.json"
+    dst = tmp_path / "dst.json"
+    store.scaffold(src)
+    store.scaffold(dst)
+    store.create_case(src, _case("ui_dup"))
+    store.create_case(dst, _case("ui_dup"))
+    with pytest.raises(UiCaseError) as e:
+        store.move_case(src, dst, "ui_dup")
+    assert e.value.kind == "conflict"
+    # 冲突时源用例仍在（未删）
+    assert [c["case_id"] for c in store.load_cases(src)] == ["ui_dup"]
+
+
+# ==================== meta ====================
+
+def test_meta_lists_actions_and_modules(case_file):
+    store.create_case(case_file, _case(module="登录"))
+    m = store.meta(case_file)
+    assert "登录" in m["modules"]
+    assert "chromium" in m["browsers"]
+    assert any(a["action"] == "goto" for a in m["actions"])
+    assert set(m["priorities"]) >= {"P0", "P1"}

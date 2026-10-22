@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
+import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -116,7 +116,7 @@ export const api = {
   /* ---------- 用例项目（项目 = 一个 Excel 用例文件）---------- */
   listProjects: () => http.get<Project[]>("/projects").then((r) => r.data),
 
-  createProject: (body: { name: string; desc?: string }) =>
+  createProject: (body: { name: string; desc?: string; kind?: "api" | "ui" }) =>
     http.post<Project>("/projects", body).then((r) => r.data),
 
   updateProject: (id: string, body: { name?: string; desc?: string }) =>
@@ -162,6 +162,43 @@ export const api = {
   /** 编辑用元数据：优先级/模块/请求头/断言操作符/变量候选 */
   getCaseMeta: (file?: string) =>
     http.get<CaseMeta>("/cases/meta", { params: { file } }).then((r) => r.data),
+
+  /* ---------- UI 用例（项目 kind=ui，载体 JSON，走 /api/ui-cases） ---------- */
+  listUiCases: (params: {
+    file: string;
+    module?: string;
+    priority?: string;
+    keyword?: string;
+    run?: boolean;
+  }) => http.get<UiCasePage>("/ui-cases", { params }).then((r) => r.data),
+
+  getUiCase: (caseId: string, file: string) =>
+    http.get<UiCaseItem>(`/ui-cases/${encodeURIComponent(caseId)}`, { params: { file } }).then((r) => r.data),
+
+  getUiCaseMeta: (file: string) =>
+    http.get<UiCaseMeta>("/ui-cases/meta", { params: { file } }).then((r) => r.data),
+
+  /** UI 变量候选（供步骤取值插入 chip） */
+  getUiCaseVariables: (file: string) =>
+    http.get<{ excel_variables: string[]; secret_variables: string[] }>(
+      "/ui-cases/variables", { params: { file } }).then((r) => r.data),
+
+  createUiCase: (data: Record<string, unknown>, file: string) =>
+    http.post<UiCaseItem>("/ui-cases", data, { params: { file } }).then((r) => r.data),
+
+  updateUiCase: (caseId: string, changes: Record<string, unknown>, file: string) =>
+    http.put<UiCaseItem>(`/ui-cases/${encodeURIComponent(caseId)}`, changes, { params: { file } }).then((r) => r.data),
+
+  deleteUiCase: (caseId: string, file: string) =>
+    http.delete<{ deleted: string; file: string }>(
+      `/ui-cases/${encodeURIComponent(caseId)}`, { params: { file } }
+    ).then((r) => r.data),
+
+  /** UI 用例迁移到另一个 UI 项目 */
+  moveUiCase: (caseId: string, body: { to_file: string; new_module?: string }, file: string) =>
+    http.post<{ moved: string; from_file: string; to_file: string; case: UiCaseItem }>(
+      `/ui-cases/${encodeURIComponent(caseId)}/move`, body, { params: { file } }
+    ).then((r) => r.data),
 
   listRuns: (limit = 20) =>
     http.get<RunItem[]>("/runs", { params: { limit } }).then((r) => r.data),
@@ -233,6 +270,13 @@ export const api = {
   /** 单文件 Allure 中文报告（新标签打开；后端首次访问会现场生成） */
   reportUrl: (runId: string) =>
     `/api/runs/${encodeURIComponent(runId)}/report`,
+
+  /** UI 步骤截图取图直链：<img> 无法带 Authorization 头，token 走 ?token= 兜底 */
+  reportAttachmentUrl: (runId: string, filename: string) => {
+    const token = getToken();
+    const q = token ? `?token=${encodeURIComponent(token)}` : "";
+    return `/api/runs/${encodeURIComponent(runId)}/attachment/${encodeURIComponent(filename)}${q}`;
+  },
 
   /* ---------- 凭证管理（值全程掩码，不回显明文） ---------- */
   listSecrets: () => http.get<SecretsResp>("/secrets").then((r) => r.data),

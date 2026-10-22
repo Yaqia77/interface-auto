@@ -47,8 +47,24 @@ def _parse_vars(raw):
 def _load_cases(file_arg: str):
     key = str(Path(file_arg).resolve())
     if key not in _LOAD_CACHE:
-        _LOAD_CACHE[key] = load_excel(Path(file_arg))
+        p = Path(file_arg)
+        if p.suffix.lower() == ".json":
+            # UI 项目走 JSON 用例，无 Excel 全局变量：给一个空壳供 context fixture 复用
+            _LOAD_CACHE[key] = _UiData()
+        else:
+            _LOAD_CACHE[key] = load_excel(p)
     return _LOAD_CACHE[key]
+
+
+class _UiData:
+    """UI 文件下 excel_data 的替身：UI 无 Excel 全局变量表，variables 恒空。"""
+    cases: list = []
+    variables: dict = {}
+
+
+def _load_ui_cases(file_arg: str) -> list:
+    from backend import ui_case_store
+    return ui_case_store.load_cases(Path(file_arg))
 
 
 def _load_dep_map() -> dict:
@@ -121,6 +137,9 @@ def pytest_generate_tests(metafunc):
     声明了依赖（dependencies.json）时：条件执行自动纳入未选中的启用依赖用例，
     并把全部选中用例拓扑排序到依赖先行的顺序（--cases 精确选择不补全，仅排序）。
     """
+    if "ui_case" in metafunc.fixturenames:
+        _generate_ui_cases(metafunc)
+        return
     if "api_case" not in metafunc.fixturenames:
         return
     data = _load_cases(metafunc.config.getoption("--file"))
@@ -165,6 +184,75 @@ def pytest_generate_tests(metafunc):
             selected = _expand_deps(selected, data.cases, dep_map)
         selected = _topo_order(selected, dep_map)
     metafunc.parametrize("api_case", selected, ids=[c.case_id for c in selected])
+
+
+def _generate_ui_cases(metafunc):
+    """UI 用例参数化（来自项目 JSON）：筛选口径与 api 一致（run/module/priority/keyword/cases）。
+
+    依赖拓扑排序与补全沿用 dependencies.json（与接口用例同一机制）。
+    """
+    file_arg = metafunc.config.getoption("--file")
+    cases = _load_ui_cases(file_arg)
+
+    module = metafunc.config.getoption("--module")
+    priority = metafunc.config.getoption("--priority")
+    keyword = metafunc.config.getoption("--keyword")
+    cases_opt = metafunc.config.getoption("--cases")
+    pri_set = {p.strip().upper() for p in priority.split(",") if p.strip()} if priority else None
+    id_set = {c.strip() for c in cases_opt.split(",") if c.strip()} if cases_opt else None
+
+    selected = []
+    for c in cases:
+        cid = c.get("case_id", "")
+        if id_set is not None:
+            if cid in id_set:
+                selected.append(c)
+            continue
+        if not c.get("run", True):
+            continue
+        if module and module not in str(c.get("module", "")):
+            continue
+        if pri_set and str(c.get("priority", "")).upper() not in pri_set:
+            continue
+        if keyword:
+            kw = keyword.strip().lower()
+            hay = " ".join([str(c.get(f, "")) for f in ("case_id", "name", "desc")]).lower()
+            if kw not in hay:
+                continue
+        selected.append(c)
+
+    if not selected:
+        hint = "--cases" if id_set is not None else "--file/--module/--priority/--keyword"
+        raise pytest.UsageError(f"没有匹配到任何 UI 用例，请检查 {hint} 筛选条件")
+
+    dep_map = _load_dep_map()
+    if dep_map:
+        selected = _ui_topo_order(selected, dep_map)
+    metafunc.parametrize("ui_case", selected, ids=[c.get("case_id", "") for c in selected])
+
+
+def _ui_topo_order(selected: list, dep_map: dict) -> list:
+    """UI 用例依赖拓扑排序（依赖先行，其余保持 JSON 原序）。"""
+    by_id = {c.get("case_id"): c for c in selected}
+    picked = set(by_id)
+    ordered: list = []
+    done: set = set()
+
+    def emit(cid, chain):
+        if cid in done or cid in chain:
+            return
+        chain.add(cid)
+        for d in dep_map.get(cid) or []:
+            if d in picked:
+                emit(d, chain)
+        chain.discard(cid)
+        if cid not in done:
+            done.add(cid)
+            ordered.append(by_id[cid])
+
+    for c in selected:
+        emit(c.get("case_id"), set())
+    return ordered
 
 
 @pytest.fixture(scope="session")

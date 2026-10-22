@@ -26,13 +26,65 @@ export interface CasePage {
   items: CaseItem[];
 }
 
+/** UI 用例单步（编辑态，与后端 UiStep 对齐） */
+export interface UiStep {
+  action: string;
+  locator?: string | null;
+  value?: unknown;
+  desc?: string;
+}
+
+/** UI 变量提取（source: text|<locator> / input_value|<locator> / cookie:<name> / url） */
+export interface UiExtract {
+  var: string;
+  source: string;
+}
+
+/** 一条 UI 用例（/api/ui-cases，与后端 UiCaseOut 对齐） */
+export interface UiCaseItem {
+  case_id: string;
+  module: string;
+  name: string;
+  desc: string;
+  priority: string;
+  run: boolean;
+  browser: string;
+  headless: boolean;
+  steps: UiStep[];
+  extract: UiExtract[];
+  pre_scripts: string[];
+  post_scripts: string[];
+}
+
+export interface UiCasePage {
+  total: number;
+  items: UiCaseItem[];
+}
+
+/** UI 步骤编辑器元数据（/api/ui-cases/meta）：动作字典驱动下拉 */
+export interface UiActionMeta {
+  action: string;
+  desc: string;
+  need_locator: boolean;
+  need_value: boolean;
+}
+
+export interface UiCaseMeta {
+  priorities: string[];
+  browsers: string[];
+  modules: string[];
+  actions: UiActionMeta[];
+}
+
 /** 用例项目（一个业务系统 = 一个 Excel 用例文件）：/api/projects */
 export interface Project {
   id: string;
   name: string;
   desc: string;
-  /** 相对项目根的用例文件路径；前端据此把 file 贯穿所有用例接口 */
+  /** 相对项目根的用例文件路径（接口 xlsx / UI json）；前端据此把 file 贯穿所有用例接口 */
   file: string;
+  /** 项目类型：api=接口用例(Excel) | ui=UI用例(JSON)，创建后不可改 */
+  kind: "api" | "ui";
   builtin: boolean;
   created_at?: string | null;
   updated_at?: string | null;
@@ -182,6 +234,23 @@ export interface RunCaseDetail {
   assertions: AssertResult[] | null;
   /** 前后置公共脚本执行轨迹（无脚本时为空数组） */
   scripts: ScriptTraceItem[];
+  /** UI 用例步骤轨迹（接口用例为 null）；截图经 /api/runs/{id}/attachment/{screenshot_source} 取图 */
+  ui_steps: UiStepTrace[] | null;
+}
+
+/** UI 单步执行轨迹（core.ui_runner 落「UI步骤」附件，后端已掩码） */
+export interface UiStepTrace {
+  index: number;
+  action: string;
+  action_desc: string;
+  locator: string | null;
+  value: string;
+  desc: string;
+  ok: boolean;
+  duration_ms: number;
+  error: string | null;
+  screenshot: string | null;
+  screenshot_source?: string | null;
 }
 
 /** 脚本单步执行轨迹（敏感变量值由后端掩码后才落报告） */

@@ -432,6 +432,27 @@ def get_run_case(run_id: str, case_id: str):
     return detail
 
 
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+@router.get("/{run_id}/attachment/{filename}", summary="批次图片附件（UI 步骤截图，供报告页取图）")
+def get_attachment(run_id: str, filename: str):
+    """从批次 allure-results 目录取图片附件（按文件名）。
+
+    只认纯图片文件名 + 限定目录，防路径穿越；与报告 HTML 一致走登录态（前端 <img> 携 ?token=）。
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="非法附件名")
+    media = _IMAGE_TYPES.get(Path(filename).suffix.lower())
+    if media is None:
+        raise HTTPException(status_code=400, detail="只允许图片附件")
+    results = _results_dir_or_404(run_id)
+    p = (results / filename).resolve()
+    if p.parent != results.resolve() or not p.is_file():
+        raise HTTPException(status_code=404, detail="附件不存在")
+    return FileResponse(p, media_type=media)
+
+
 # ==================== 报告删除 / 保留策略（需 report:delete 权限） ====================
 
 

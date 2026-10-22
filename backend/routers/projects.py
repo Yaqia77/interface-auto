@@ -34,7 +34,7 @@ def get_project(project_id: str):
 @router.post("", response_model=ProjectOut, summary="新建项目（脚手架空用例文件）", status_code=201)
 def create_project(body: ProjectCreate, _: dict = Depends(authz.require_perm("case:write"))):
     try:
-        return project_store.create(body.name, body.desc)
+        return project_store.create(body.name, body.desc, body.kind)
     except ProjectError as e:
         _raise(e)
 

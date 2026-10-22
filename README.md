@@ -85,6 +85,16 @@ python -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
+> **UI 自动化用例（可选）**：若要用 UI 项目（可视化步骤，Playwright 驱动浏览器），
+> 装完依赖后还需下载浏览器内核（首次一次即可）：
+>
+> ```bash
+> # Windows
+> .venv\Scripts\python.exe -m playwright install chromium
+> # macOS / Linux
+> .venv/bin/python -m playwright install chromium
+> ```
+
 ### 2. 生成用例模板（首次）
 
 ```bash
@@ -277,6 +287,27 @@ CLI 侧同样生效：脚本库存 `data/scripts.json`（路径可在 config.yam
 - 底层支撑：`excel_loader.load(allow_empty=True)` 让刚建好、还未录用例的空项目文件能被正常读到空列表而非报错
   （仅平台读取链路用，执行链路 `conftest/main` 仍保持零用例视为异常）
 
+### UI 自动化用例（项目分型：api / ui）
+
+项目新增 `kind` 字段：`api`（接口用例，Excel，现状）| `ui`（UI 用例，JSON，新增）。
+**一个项目 = 一个用例文件** 的架构不变，双轨并存、设施全复用（执行中心/定时任务/场景/依赖/
+Webhook/权限/环境/凭证均按 `file` 参数寻址，kind 从项目解析，零改动）。
+
+- **新建 UI 项目**：「用例管理」页新建项目时选类型为「UI 用例」，后端在 `data/cases/<id>.json`
+  脚手架 `{"version":1,"cases":[]}`；切换到该项目后页面切换为 UI 形态（步骤列表 + 可视化步骤编辑器）
+- **数据模型**：每条 UI 用例含 `case_id/module/name/desc/priority/run/browser/headless/steps/extract`，
+  `steps` 为按序执行的动作列表；UI 项目不支持 Excel 导入导出
+- **动作集（v1 12 个）**：`goto / click / fill / press / select / check / hover / wait_for /
+  screenshot / expect_visible / expect_text / expect_url`；失败即中断并截全屏
+- **定位器**：`css=`（默认前缀可省）/ `xpath=` / `text=` / `role=button,name=登录`，解释器解析为 Playwright locator
+- **变量与登录态**：`goto` 相对路径拼环境 `base_url`；取值支持 `{{var}}`（复用 `core/variable.render()`）；
+  `extract` 支持 `text|<locator>`、`input_value|<locator>`、`cookie:<name>`、`url`——登录用例提取 token 后下游用例引用
+- **执行链路**：`main.py` 按文件后缀分流（`.json`→`tests/test_ui.py`，其余→`tests/test_api.py`）；
+  `core/ui_runner.py` 用 Playwright sync API 逐步执行并落「UI步骤」附件 + 截图到 allure-results
+- **报告**：执行详情抽屉新增「UI 步骤」Tab——步骤表格（动作/定位器/结果/耗时）+ 失败步骤截图预览
+  （截图经 `/api/runs/{id}/attachment/{file}` 取图，仅登录态可读图片）
+- **边界（v1）**：仅 Web（chromium），headless 默认开；不做录制、不做实时元素拾取；storage_state 留待二期
+
 ## 运行参数
 
 ```bash
@@ -353,6 +384,8 @@ cd platform-web ; npm run dev
 .venv\Scripts\python.exe tools\smoke_api_defs.py
 # 全功能端到端冒烟（项目 CRUD/用例 CRUD/智能导入/依赖/Cron+定时/执行与报告删除，零外部依赖）
 .venv\Scripts\python.exe tools\smoke_full.py
+# UI 自动化端到端冒烟（建 UI 项目 → 用例 CRUD/迁移 → 发起批次 → 步骤轨迹与截图 → 清理，需 chromium）
+.venv\Scripts\python.exe tools\smoke_ui.py
 ```
 
 角色与权限矩阵（默认基线写在 `backend/perm_store.py`，可在「系统管理 → 角色权限」页勾选调整，自定义分配存 `data/permissions.json`）：
@@ -425,4 +458,5 @@ cd platform-web ; npm run dev
   - [x] v2 定时：定时任务可视化 Cron 构建器 + 环境/模块/优先级下拉选择
   - [x] v2 项目：用例项目维度（一个业务系统一个 Excel + 项目切换器，模块按项目隔离）
   - [x] v2 冒烟：全功能端到端冒烟脚本（smoke_full.py，项目/用例/导入/依赖/定时/执行主链路）
+  - [x] v2 UI：UI 自动化（项目分型 api/ui + 可视化步骤编辑器 + Playwright 解释器 + 步骤轨迹/截图报告）
 - [ ] v1.1：CI 集成（Jenkinsfile / GitHub Actions）、失败通知模板扩充

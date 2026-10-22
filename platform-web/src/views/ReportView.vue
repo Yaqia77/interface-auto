@@ -165,15 +165,21 @@ const failCats = computed<FailCat[]>(() => {
 const detailVisible = ref(false);
 const detail = ref<RunCaseDetail | null>(null);
 const detailLoading = ref(false);
-const detailTab = ref<"req" | "resp" | "assert" | "log">("req");
+const detailTab = ref<"req" | "resp" | "assert" | "script" | "ui" | "log">("req");
 
 async function openDetail(row: RunCaseSummary) {
   detailVisible.value = true;
   detailLoading.value = true;
-  detailTab.value = FAILED_STATUSES.includes(row.status) ? "assert" : "req";
   detail.value = null;
   try {
     detail.value = await api.getRunCaseDetail(runId.value, row.case_id);
+    // UI 用例：默认落在步骤轨迹页；接口用例保持原有默认（失败看断言，否则看请求）
+    const uiSteps = detail.value?.ui_steps;
+    if (uiSteps && uiSteps.length) {
+      detailTab.value = "ui";
+    } else {
+      detailTab.value = FAILED_STATUSES.includes(row.status) ? "assert" : "req";
+    }
   } finally {
     detailLoading.value = false;
   }
@@ -687,6 +693,48 @@ watch(runId, () => load());
                 <template #default="{ row }">
                   <div v-if="row.desc" class="case-name">{{ row.desc }}</div>
                   <div :class="row.ok ? 'txt-ok' : 'txt-fail'" style="font-size: 12px">{{ row.detail }}</div>
+                </template>
+              </el-table-column>
+            </el-table>
+          </el-tab-pane>
+          <el-tab-pane v-if="detail.ui_steps && detail.ui_steps.length" label="UI 步骤" name="ui">
+            <div class="dim" style="margin-bottom: 8px">按序执行，任一步失败即中断并截全屏；点截图可放大查看。</div>
+            <el-table :data="detail.ui_steps" size="small">
+              <el-table-column label="#" width="44">
+                <template #default="{ row }">{{ row.index }}</template>
+              </el-table-column>
+              <el-table-column label="动作" width="110">
+                <template #default="{ row }">
+                  <div>{{ row.action_desc || row.action }}</div>
+                  <div class="mono case-name">{{ row.action }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="定位器 / 取值" min-width="220">
+                <template #default="{ row }">
+                  <div v-if="row.locator" class="mono">{{ row.locator }}</div>
+                  <div v-if="row.value" class="mono case-name">= {{ row.value }}</div>
+                  <div v-if="row.desc" class="case-name">{{ row.desc }}</div>
+                  <div v-if="row.error" class="txt-fail" style="font-size: 12px">{{ row.error }}</div>
+                </template>
+              </el-table-column>
+              <el-table-column label="结果" width="58">
+                <template #default="{ row }">
+                  <el-tag :type="row.ok ? 'success' : 'danger'" size="small">{{ row.ok ? "✓" : "✗" }}</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="耗时" width="76">
+                <template #default="{ row }"><span class="mono">{{ row.duration_ms }}ms</span></template>
+              </el-table-column>
+              <el-table-column label="截图" width="84">
+                <template #default="{ row }">
+                  <el-image
+                    v-if="row.screenshot_source || row.screenshot"
+                    :src="api.reportAttachmentUrl(runId, row.screenshot_source || row.screenshot || '')"
+                    :preview-src-list="[api.reportAttachmentUrl(runId, row.screenshot_source || row.screenshot || '')]"
+                    preview-teleported fit="cover" lazy
+                    style="width: 62px; height: 40px; border-radius: 4px"
+                  />
+                  <span v-else class="dim">—</span>
                 </template>
               </el-table-column>
             </el-table>

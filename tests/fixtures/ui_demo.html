@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <title>UI 演示页</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; }
+    .field { margin: 12px 0; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <h1 id="title">接口自动化 UI 演示</h1>
+
+  <!-- 登录表单 -->
+  <form id="login-form" class="field">
+    <input id="username" type="text" placeholder="用户名" />
+    <input id="password" type="password" placeholder="密码" />
+    <select id="role">
+      <option value="dev">开发</option>
+      <option value="qa">测试</option>
+      <option value="admin">管理员</option>
+    </select>
+    <label><input id="agree" type="checkbox" /> 同意条款</label>
+    <button id="submit" type="submit">登录</button>
+  </form>
+
+  <!-- 结果区（登录后显示） -->
+  <div id="result" class="hidden">
+    <p class="welcome">欢迎，<span id="who">游客</span></p>
+    <p class="order-id">ORDER-20260101</p>
+  </div>
+
+  <script>
+    document.getElementById('login-form').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var u = document.getElementById('username').value || '游客';
+      document.getElementById('who').textContent = u;
+      document.getElementById('result').classList.remove('hidden');
+      document.title = '登录后-' + u;
+      // 登录后写入一个 cookie，供 cookie: 提取验证
+      document.cookie = 'session_token=abc123; path=/';
+      // 更新 URL 片段，供 expect_url 验证
+      history.replaceState(null, '', '?logged_in=1#after-login');
+    });
+  </script>
+</body>
+</html>
