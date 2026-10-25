@@ -19,6 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.context import load_config  # noqa: E402
+from core.engines import engine_for_file, get_engine  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,12 +50,11 @@ def main() -> None:
     report_dir = ROOT / "reports" / f"run_{ts}"
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    # 按用例文件类型分流收集：.json → UI 链路（test_ui），其余 → 接口链路（test_api）。
-    # 显式指定单个测试文件，避免两类收集器在同一批次互相干扰（api 收集器会误读 json）。
-    if file_arg.suffix.lower() == ".json":
-        test_target = str(ROOT / "tests" / "test_ui.py")
-    else:
-        test_target = str(ROOT / "tests" / "test_api.py")
+    # 按用例文件查注册表得到引擎，再按 engine.key 分发到对应 pytest 收集入口（.json → web，其余 → api）。
+    # 无匹配回落 api，与旧硬编码 if/else 的分流结果完全一致；显式指定单文件避免两类收集器同批次互干扰。
+    engine = engine_for_file(file_arg) or get_engine("api")
+    test_target = str(ROOT / engine.test_module)
+    print(f"[interface-auto] 引擎: {engine.key}（{engine.label}）→ {engine.test_module}")
     pytest_args = [test_target, "-v", "--tb=short"]
     if args.env:
         pytest_args += [f"--env={args.env}"]

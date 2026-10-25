@@ -152,7 +152,7 @@ def main():
     if os.environ.get("IA_DEF_DEBUG") != "1":
         logger.remove()
 
-    from backend import api_def_store, excel_writer, openapi_import
+    from backend.api import api_def_store, excel_writer, openapi_import
 
     print(f"目标：{BASE}")
     admin_token, qa_token, vt = login("admin"), login("qa"), login("viewer")

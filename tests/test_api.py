@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from core.runner import CaseRunner
+from core.engines import get_engine
 
 try:
     import allure
@@ -36,9 +36,9 @@ def test_api(api_case, executor, context, dep_map, case_results):
             case_results[api_case.case_id] = "skipped"
             pytest.skip(f"因依赖用例未通过而阻塞（未发起请求）: {', '.join(failed_deps)}")
 
-    runner = CaseRunner(executor, context)
+    # 统一执行入口：按 key 取引擎多态执行（内部委托 CaseRunner，与旧直调完全一致）。
     start = time.perf_counter()
-    result = runner.run(api_case)
+    result = get_engine("api").execute(api_case, context, executor=executor)
     result.duration = time.perf_counter() - start
 
     if HAS_ALLURE:

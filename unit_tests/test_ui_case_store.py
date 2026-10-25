@@ -15,8 +15,8 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backend import ui_case_store as store  # noqa: E402
-from backend.ui_case_store import UiCaseError  # noqa: E402
+from backend.ui import ui_case_store as store  # noqa: E402
+from backend.ui.ui_case_store import UiCaseError  # noqa: E402
 
 
 def _case(cid="ui_login_001", **over):

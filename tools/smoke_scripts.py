@@ -95,12 +95,12 @@ def main():
     if os.environ.get("IA_SCRIPT_DEBUG") != "1":
         logger.remove()
 
-    from backend import excel_writer
+    from backend.api import excel_writer
     from core import scripts as core_scripts
     from core.context import Context
     from core.http_client import HttpExecutor
     from core.models import TestCase
-    from core.runner import CaseRunner
+    from core.engines.api.engine import CaseRunner
 
     print(f"目标：{BASE}")
     admin_token, qa_token, vt = login("admin"), login("qa"), login("viewer")

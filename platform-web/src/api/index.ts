@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
+import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, AppCaseItem, AppCasePage, AppCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -116,7 +116,7 @@ export const api = {
   /* ---------- 用例项目（项目 = 一个 Excel 用例文件）---------- */
   listProjects: () => http.get<Project[]>("/projects").then((r) => r.data),
 
-  createProject: (body: { name: string; desc?: string; kind?: "api" | "ui" }) =>
+  createProject: (body: { name: string; desc?: string; kind?: "api" | "ui" | "app" }) =>
     http.post<Project>("/projects", body).then((r) => r.data),
 
   updateProject: (id: string, body: { name?: string; desc?: string }) =>
@@ -198,6 +198,43 @@ export const api = {
   moveUiCase: (caseId: string, body: { to_file: string; new_module?: string }, file: string) =>
     http.post<{ moved: string; from_file: string; to_file: string; case: UiCaseItem }>(
       `/ui-cases/${encodeURIComponent(caseId)}/move`, body, { params: { file } }
+    ).then((r) => r.data),
+
+  /* ---------- App 用例（项目 kind=app，载体 .apjson，走 /api/app-cases；阶段 3 预留位） ---------- */
+  listAppCases: (params: {
+    file: string;
+    module?: string;
+    priority?: string;
+    keyword?: string;
+    run?: boolean;
+  }) => http.get<AppCasePage>("/app-cases", { params }).then((r) => r.data),
+
+  getAppCase: (caseId: string, file: string) =>
+    http.get<AppCaseItem>(`/app-cases/${encodeURIComponent(caseId)}`, { params: { file } }).then((r) => r.data),
+
+  getAppCaseMeta: (file: string) =>
+    http.get<AppCaseMeta>("/app-cases/meta", { params: { file } }).then((r) => r.data),
+
+  /** App 变量候选（供步骤取值插入 chip） */
+  getAppCaseVariables: (file: string) =>
+    http.get<{ excel_variables: string[]; secret_variables: string[] }>(
+      "/app-cases/variables", { params: { file } }).then((r) => r.data),
+
+  createAppCase: (data: Record<string, unknown>, file: string) =>
+    http.post<AppCaseItem>("/app-cases", data, { params: { file } }).then((r) => r.data),
+
+  updateAppCase: (caseId: string, changes: Record<string, unknown>, file: string) =>
+    http.put<AppCaseItem>(`/app-cases/${encodeURIComponent(caseId)}`, changes, { params: { file } }).then((r) => r.data),
+
+  deleteAppCase: (caseId: string, file: string) =>
+    http.delete<{ deleted: string; file: string }>(
+      `/app-cases/${encodeURIComponent(caseId)}`, { params: { file } }
+    ).then((r) => r.data),
+
+  /** App 用例迁移到另一个 App 项目 */
+  moveAppCase: (caseId: string, body: { to_file: string; new_module?: string }, file: string) =>
+    http.post<{ moved: string; from_file: string; to_file: string; case: AppCaseItem }>(
+      `/app-cases/${encodeURIComponent(caseId)}/move`, body, { params: { file } }
     ).then((r) => r.data),
 
   listRuns: (limit = 20) =>

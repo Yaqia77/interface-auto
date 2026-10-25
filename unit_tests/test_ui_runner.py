@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""core.ui_runner 动作解释器功能测试：对本地 fixture 页跑通全部 12 动作 + 变量提取。
+"""core.engines.web.engine（UiRunner）动作解释器功能测试：对本地 fixture 页跑通全部 12 动作 + 变量提取。
 
 零外部依赖（本地 http 服务 fixture 页，以便验证 cookie 提取）。若浏览器未就绪则整体 skip，不阻断无 UI 环境下的回归。
     .venv/Scripts/python.exe -m pytest unit_tests/test_ui_runner.py -v
@@ -17,7 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from core.context import Context  # noqa: E402
-from core.ui_runner import UiRunner  # noqa: E402
+from core.engines.web.engine import UiRunner, UiRunResult, UiRunnerError  # noqa: E402
 
 FIXTURES = ROOT / "tests" / "fixtures"
 
@@ -126,3 +126,81 @@ def test_relative_url_requires_base(base_url):
     res = r.run({"case_id": "t", "steps": [{"action": "goto", "value": "/login"}]})
     assert res.ok is False
     assert "base_url" in (res.error or "")
+
+
+# ==================== 登录态（storage_state）：纯逻辑，不依赖浏览器 ====================
+
+class _FakeBrowser:
+    """只记录 new_context 收到的关键字，用于断言 storage_state 是否被传递。"""
+    def __init__(self):
+        self.kwargs = None
+
+    def new_context(self, **kw):
+        self.kwargs = kw
+        return object()
+
+
+class _FakeContext:
+    """模拟 Playwright context.storage_state(path=..)：把占位内容写到指定路径。"""
+    def storage_state(self, path=None):
+        Path(path).write_text('{"cookies": []}', encoding="utf-8")
+
+
+def test_no_session_is_backward_compatible():
+    # 与 v1 同调用方式（不传 provider），未引用会话 → (None, None)，后续走裸上下文
+    r = UiRunner(Context({}, {}), "http://x")
+    path, err = r._resolve_storage_state({"case_id": "t", "steps": []})
+    assert path is None and err is None
+    fb = _FakeBrowser()
+    UiRunner._new_context(fb, path)
+    assert fb.kwargs == {}  # 裸 new_context()，未注入 storage_state
+
+
+def test_attach_valid_storage_state_path_passed_to_context(tmp_path):
+    ss = tmp_path / "sid__test.json"
+    ss.write_text('{"cookies": []}', encoding="utf-8")
+    r = UiRunner(Context({}, {}), "http://x", session_provider=lambda case: (str(ss), None))
+    path, err = r._resolve_storage_state({"case_id": "t", "session": "sid"})
+    assert err is None and path == str(ss)
+    fb = _FakeBrowser()
+    UiRunner._new_context(fb, path)
+    assert fb.kwargs == {"storage_state": str(ss)}  # 有效登录态→开机加载
+
+
+def test_session_without_provider_gives_guidance():
+    r = UiRunner(Context({}, {}), "http://x")  # 无 provider
+    path, err = r._resolve_storage_state({"case_id": "t", "session": "sid"})
+    assert path is None
+    assert "未注入会话解析器" in err
+
+
+def test_session_missing_marks_case_failed_without_browser():
+    # 会话未采集：provider 返回中文指引 → run() 应在启动浏览器/跑步骤之前中断
+    guidance = "会话 sid 尚未采集，请在『登录态』页点『立即采集』"
+    r = UiRunner(Context({}, {}), "http://x", session_provider=lambda case: (None, guidance))
+    res = r.run({"case_id": "t", "session": "sid", "steps": [{"action": "goto", "value": "/x"}]})
+    assert res.ok is False
+    assert guidance in (res.error or "")
+    assert res.steps == []  # 未跑任何步骤 → 未启动浏览器（与是否安装 playwright 无关）
+
+
+def test_collect_invokes_committer_and_cleans_tmp(tmp_path):
+    seen = {}
+
+    def committer(case, tmp_file):
+        seen["file"] = tmp_file
+        seen["exists"] = Path(tmp_file).exists()  # 导出临时文件此刻确实存在
+
+    r = UiRunner(Context({}, {}), "http://x", output_dir=tmp_path, mode="collect",
+                 session_committer=committer)
+    res = UiRunResult(case_id="login_001")
+    r._collect(_FakeContext(), {"case_id": "login_001"}, res)
+    assert seen["exists"] is True
+    assert res.collected == seen["file"]
+    assert not Path(seen["file"]).exists()  # _collect 收尾幂等清理临时文件
+
+
+def test_collect_without_committer_raises():
+    r = UiRunner(Context({}, {}), "http://x", mode="collect")
+    with pytest.raises(UiRunnerError):
+        r._collect(_FakeContext(), {"case_id": "x"}, UiRunResult(case_id="x"))

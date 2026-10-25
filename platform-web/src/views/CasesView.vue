@@ -7,6 +7,7 @@ import { api } from "../api";
 import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, Project, ScriptItem } from "../types";
 import JsonViewer from "../components/JsonViewer.vue";
 import UiCasesView from "./UiCasesView.vue";
+import AppCasesView from "./AppCasesView.vue";
 
 const router = useRouter();
 const route = useRoute();
@@ -36,8 +37,26 @@ const currentProject = computed(() =>
 /** 所有用例接口都要透传的 file 参数；兜底默认项目的存量文件路径 */
 const currentFile = computed(() => currentProject.value?.file ?? "data/api_cases.xlsx");
 
-/** 项目形态：ui=可视化步骤用例（交 UiCasesView），api=接口 Excel 用例（本页原有形态） */
+/** 项目形态：ui=可视化步骤用例（交 UiCasesView），app=App 用例（交 AppCasesView），api=接口 Excel 用例（本页原有形态） */
 const isUi = computed(() => currentProject.value?.kind === "ui");
+const isApp = computed(() => currentProject.value?.kind === "app");
+/** 非接口形态（JSON/.apjson 载体）：Excel 筛选面板与本页原生拉取均需让位给子视图 */
+const isNonApi = computed(() => isUi.value || isApp.value);
+
+const kindLabel = (k: string) => (k === "ui" ? "UI 用例" : k === "app" ? "App 用例" : "接口用例");
+/** 顶部三段切换：反映当前项目类型，点击切到该类型的第一个项目（无则提示新建） */
+const currentKind = computed(() => currentProject.value?.kind ?? "api");
+const kindCounts = computed(() => {
+  const c: Record<string, number> = { api: 0, ui: 0, app: 0 };
+  for (const p of projects.value) c[p.kind] = (c[p.kind] ?? 0) + 1;
+  return c;
+});
+function switchKind(k: "api" | "ui" | "app") {
+  if (k === currentKind.value) return;
+  const p = projects.value.find((x) => x.kind === k);
+  if (p) activeProjectId.value = p.id;
+  else ElMessage.info(`暂无「${kindLabel(k)}」项目，可点上方“＋ 新建”选择该类型`);
+}
 
 async function loadProjects() {
   try { projects.value = await api.listProjects(); } catch { /* 拦截器已提示 */ }
@@ -54,7 +73,7 @@ function projectLabel(p: Project) {
 /* ---------- 项目管理：新建 / 重命名·说明 / 删除（builtin 默认项目禁删） ---------- */
 const projDlgVisible = ref(false);
 const projSaving = ref(false);
-const projForm = reactive({ name: "", desc: "", kind: "api" as "api" | "ui" });
+const projForm = reactive({ name: "", desc: "", kind: "api" as "api" | "ui" | "app" });
 const projEditingId = ref("");   // "" = 新建；否则为待更新项目 id
 
 function openProjCreate() {
@@ -116,7 +135,8 @@ const moveVisible = ref(false);
 const moveSaving = ref(false);
 const moveForm = reactive({ toProjectId: "", new_module: "" });
 const moveTargetModules = ref<string[]>([]);   // 目标项目的模块候选
-const moveProjects = computed(() => projects.value.filter((p) => p.id !== activeProjectId.value));
+const moveProjects = computed(() =>
+  projects.value.filter((p) => p.id !== activeProjectId.value && p.kind === (currentProject.value?.kind ?? "api")));
 
 function openMove() {
   if (!selected.value.length) { ElMessage.warning("请先勾选要迁移的用例"); return; }
@@ -176,7 +196,7 @@ watch(activeProjectId, (v) => {
   activeModule.value = "";
   currentPage.value = 1;
   search();
-  if (!isUi.value) api.getCaseMeta(currentFile.value).then((m) => (meta.value = m)).catch(() => { /* 拦截器已提示 */ });
+  if (!isNonApi.value) api.getCaseMeta(currentFile.value).then((m) => (meta.value = m)).catch(() => { /* 拦截器已提示 */ });
 });
 
 /* ================= 模块导航 + 整体分页（左侧选模块，右侧分页表格） ================= */
@@ -212,7 +232,7 @@ function selectModule(name: string) {
 }
 
 async function search() {
-  if (isUi.value) { cases.value = []; total.value = 0; return; }  // UI 项目由 UiCasesView 自行拉取
+  if (isNonApi.value) { cases.value = []; total.value = 0; return; }  // UI/App 项目由子视图自行拉取
   loading.value = true;
   try {
     const resp = await api.listCases({
@@ -973,7 +993,7 @@ onMounted(async () => {
   }
   await loadProjects();   // 先确定当前项目，再按其文件拉用例
   search();
-  if (!isUi.value) { try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ } }
+  if (!isNonApi.value) { try { meta.value = await api.getCaseMeta(currentFile.value); } catch { /* 拦截器已提示 */ } }
   loadScripts();
   loadApiDefs();
   await nextTick();
@@ -985,11 +1005,22 @@ onMounted(async () => {
   <div class="case-page">
     <!-- 左侧：项目切换 + 模块导航（项目 = 一个 Excel 文件，模块仅在项目内分组，互不污染） -->
     <el-card shadow="never" class="mod-panel">
-      <div class="mod-panel-head">用例项目</div>
+      <div class="mod-panel-head">用例类型</div>
+      <el-radio-group
+        :model-value="currentKind"
+        size="small"
+        class="kind-seg"
+        @change="switchKind(($event as 'api' | 'ui' | 'app'))"
+      >
+        <el-radio-button value="api">接口{{ kindCounts.api ? `(${kindCounts.api})` : "" }}</el-radio-button>
+        <el-radio-button value="ui">UI{{ kindCounts.ui ? `(${kindCounts.ui})` : "" }}</el-radio-button>
+        <el-radio-button value="app">App{{ kindCounts.app ? `(${kindCounts.app})` : "" }}</el-radio-button>
+      </el-radio-group>
+      <div class="mod-panel-head" style="margin-top: 10px">用例项目</div>
       <el-select v-model="activeProjectId" style="width: 100%" :loading="!projects.length">
         <el-option v-for="p in projects" :key="p.id" :value="p.id" :label="projectLabel(p)">
           <span class="opt-key">{{ p.name }}{{ p.builtin ? " ⭐" : "" }}</span>
-          <span class="opt-val">{{ p.kind === "ui" ? "UI" : "接口" }} · {{ p.case_count }} 条</span>
+          <span class="opt-val">{{ kindLabel(p.kind) }} · {{ p.case_count }} 条</span>
         </el-option>
       </el-select>
       <div class="proj-file mono" :title="currentFile">{{ currentFile }}</div>
@@ -999,8 +1030,8 @@ onMounted(async () => {
         <el-button v-if="currentProject" v-perm="'case:write'" link type="primary" size="small" @click="openProjEdit">重命名</el-button>
         <el-button v-if="currentProject && !currentProject.builtin" v-perm="'case:delete'" link type="danger" size="small" @click="removeProject">删除</el-button>
       </div>
-      <el-divider v-if="!isUi" style="margin: 10px 0" />
-      <template v-if="!isUi">
+      <el-divider v-if="!isNonApi" style="margin: 10px 0" />
+      <template v-if="!isNonApi">
       <div class="mod-panel-head">模块</div>
       <ul class="mod-list">
         <li :class="{ active: activeModule === '' }" @click="selectModule('')">
@@ -1015,8 +1046,8 @@ onMounted(async () => {
       </template>
     </el-card>
 
-    <!-- 右侧：接口项目走原有筛选 + 分页表格；UI 项目整体交给 UiCasesView（自包含拉取/编辑） -->
-    <div v-if="!isUi" class="case-body">
+    <!-- 右侧：接口项目走原有筛选 + 分页表格；UI/App 项目整体交给对应子视图（自包含拉取/编辑） -->
+    <div v-if="!isNonApi" class="case-body">
       <el-alert
         v-if="carried"
         type="warning"
@@ -1155,7 +1186,8 @@ onMounted(async () => {
         </div>
       </el-card>
     </div>
-    <UiCasesView v-else :file="currentFile" :project="currentProject" :projects="projects" @projects-changed="loadProjects" />
+    <UiCasesView v-else-if="isUi" :file="currentFile" :project="currentProject" :projects="projects" @projects-changed="loadProjects" />
+    <AppCasesView v-else :file="currentFile" :project="currentProject" :projects="projects" @projects-changed="loadProjects" />
 
     <!-- 编辑抽屉：下拉候选来自 /api/cases/meta，保存只提交差异字段 -->
     <el-drawer v-model="editVisible" size="52%" :title="mode === 'create' ? (copyFrom ? '复制新增用例' : '新增用例') : `编辑用例 ${editing?.case_id ?? ''}`">
@@ -1455,8 +1487,9 @@ onMounted(async () => {
           <el-radio-group v-model="projForm.kind">
             <el-radio value="api">接口用例</el-radio>
             <el-radio value="ui">UI 用例</el-radio>
+            <el-radio value="app">App 用例</el-radio>
           </el-radio-group>
-          <div class="hint" style="margin: 4px 0 0">创建后不可改：接口用例基于 Excel，UI 用例基于可视化步骤（JSON）。</div>
+          <div class="hint" style="margin: 4px 0 0">创建后不可改：接口用例基于 Excel，UI/App 用例基于可视化步骤（分别 JSON / .apjson）。</div>
         </el-form-item>
         <el-form-item label="说明">
           <el-input v-model="projForm.desc" type="textarea" :rows="2" placeholder="选填：项目用途、负责人等" />
@@ -1464,7 +1497,7 @@ onMounted(async () => {
       </el-form>
       <div class="hint" style="margin: 0">
         <template v-if="projEditingId">项目文件路径不可变，重命名不影响定时任务/场景引用。</template>
-        <template v-else>新建会在 data/cases/ 下生成一张空用例载体（{{ projForm.kind === "ui" ? "JSON 步骤表" : "Excel（仅表头）" }}），切换到该项目后即可新增用例；不同项目的模块彼此隔离。</template>
+        <template v-else>新建会在 data/cases/ 下生成一张空用例载体（{{ projForm.kind === "ui" ? "JSON 步骤表" : projForm.kind === "app" ? "App 步骤表(.apjson)" : "Excel（仅表头）" }}），切换到该项目后即可新增用例；不同项目的模块彼此隔离。</template>
       </div>
       <template #footer>
         <el-button @click="projDlgVisible = false">取消</el-button>
@@ -1521,6 +1554,9 @@ onMounted(async () => {
 .mod-panel { width: 200px; flex: 0 0 200px; }
 .mod-panel :deep(.el-card__body) { padding: 8px; }
 .mod-panel-head { font-weight: 600; font-size: 13px; color: #303133; padding: 4px 8px 8px; }
+.kind-seg { display: flex; width: 100%; }
+.kind-seg :deep(.el-radio-button) { flex: 1; }
+.kind-seg :deep(.el-radio-button__inner) { width: 100%; padding: 7px 4px; font-size: 12px; }
 .mod-list { list-style: none; margin: 0; padding: 0; max-height: calc(100vh - 320px); overflow: auto; }
 .mod-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: #606266; }
 .mod-list li:hover { background: #f0f2f5; }

@@ -33,8 +33,13 @@ async function loadProjects() {
 }
 
 async function loadMeta() {
+  // 按项目类型选源：接口→/cases/meta(Excel)、UI→/ui-cases/meta、App→/app-cases/meta；
+  // 三者都暴露 modules/priorities，避免对 .json/.apjson 误调 Excel 接口（旧 500 根因）。
+  const kind = currentProject.value?.kind ?? "api";
   try {
-    const m = await api.getCaseMeta(selectedFile.value);
+    const m = kind === "ui" ? await api.getUiCaseMeta(selectedFile.value)
+      : kind === "app" ? await api.getAppCaseMeta(selectedFile.value)
+      : await api.getCaseMeta(selectedFile.value);
     metaModules.value = m.modules;
     metaPrios.value = m.priorities;
   } catch { metaModules.value = []; metaPrios.value = []; }
@@ -74,12 +79,23 @@ async function loadTree() {
   if (treeData.value.length) return;      // 首次切到勾选模式才加载，后续复用
   treeLoading.value = true;
   try {
-    const resp = await api.listCases({ run: true, file: selectedFile.value });   // 仅列所选项目已启用（run=Y）的用例
+    // 按项目类型选端点：接口用 api_name 作标签，UI/App 用 name（三域列表契约同名 case_id/module/priority）
+    const kind = currentProject.value?.kind ?? "api";
+    const leaves: { id: string; label: string; module: string; priority: string }[] = [];
+    if (kind === "ui") {
+      const resp = await api.listUiCases({ run: true, file: selectedFile.value });
+      for (const c of resp.items) leaves.push({ id: c.case_id, label: `${c.case_id} · ${c.name}`, module: c.module, priority: c.priority });
+    } else if (kind === "app") {
+      const resp = await api.listAppCases({ run: true, file: selectedFile.value });
+      for (const c of resp.items) leaves.push({ id: c.case_id, label: `${c.case_id} · ${c.name}`, module: c.module, priority: c.priority });
+    } else {
+      const resp = await api.listCases({ run: true, file: selectedFile.value });
+      for (const c of resp.items) leaves.push({ id: c.case_id, label: `${c.case_id} · ${c.api_name}`, module: c.module, priority: c.priority });
+    }
     const byMod = new Map<string, TreeNode[]>();
-    for (const c of resp.items) {
-      const leaf: TreeNode = { id: c.case_id, label: `${c.case_id} · ${c.api_name}`, module: c.module, priority: c.priority };
-      if (!byMod.has(c.module)) byMod.set(c.module, []);
-      byMod.get(c.module)!.push(leaf);
+    for (const leaf of leaves) {
+      if (!byMod.has(leaf.module)) byMod.set(leaf.module, []);
+      byMod.get(leaf.module)!.push(leaf);
     }
     treeData.value = [...byMod.entries()]
       .sort((a, b) => a[0].localeCompare(b[0], "zh"))

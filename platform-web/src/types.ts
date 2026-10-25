@@ -76,6 +76,41 @@ export interface UiCaseMeta {
   actions: UiActionMeta[];
 }
 
+/** App 变量提取（与 UiExtract 同构，source 面向移动端） */
+export interface AppExtract {
+  var: string;
+  source: string;
+}
+
+/** 一条 App 用例（/api/app-cases，与后端 AppCaseOut 对齐；browser→platform，加 app 包名） */
+export interface AppCaseItem {
+  case_id: string;
+  module: string;
+  name: string;
+  desc: string;
+  priority: string;
+  run: boolean;
+  platform: string;
+  app: string;
+  steps: UiStep[];
+  extract: AppExtract[];
+  pre_scripts: string[];
+  post_scripts: string[];
+}
+
+export interface AppCasePage {
+  total: number;
+  items: AppCaseItem[];
+}
+
+/** App 步骤编辑器元数据（/api/app-cases/meta）：动作字典与 UI 同构 */
+export interface AppCaseMeta {
+  priorities: string[];
+  platforms: string[];
+  modules: string[];
+  actions: UiActionMeta[];
+}
+
 /** 用例项目（一个业务系统 = 一个 Excel 用例文件）：/api/projects */
 export interface Project {
   id: string;
@@ -83,8 +118,8 @@ export interface Project {
   desc: string;
   /** 相对项目根的用例文件路径（接口 xlsx / UI json）；前端据此把 file 贯穿所有用例接口 */
   file: string;
-  /** 项目类型：api=接口用例(Excel) | ui=UI用例(JSON)，创建后不可改 */
-  kind: "api" | "ui";
+  /** 项目类型：api=接口用例(Excel) | ui=UI用例(JSON) | app=App用例(.apjson)，创建后不可改 */
+  kind: "api" | "ui" | "app";
   builtin: boolean;
   created_at?: string | null;
   updated_at?: string | null;

@@ -13,7 +13,7 @@ from core.context import Context, get_env_config, load_config  # noqa: E402
 from core.excel_loader import load as load_excel  # noqa: E402
 from core.excel_loader import load_secret_vars  # noqa: E402
 from core.http_client import HttpExecutor  # noqa: E402
-from core.runner import setup_logging  # noqa: E402
+from core.log_setup import setup_logging  # noqa: E402
 
 _LOAD_CACHE: dict = {}
 
@@ -48,8 +48,8 @@ def _load_cases(file_arg: str):
     key = str(Path(file_arg).resolve())
     if key not in _LOAD_CACHE:
         p = Path(file_arg)
-        if p.suffix.lower() == ".json":
-            # UI 项目走 JSON 用例，无 Excel 全局变量：给一个空壳供 context fixture 复用
+        if p.suffix.lower() in (".json", ".apjson"):
+            # UI/App 项目走 JSON 用例，无 Excel 全局变量：给一个空壳供 context fixture 复用
             _LOAD_CACHE[key] = _UiData()
         else:
             _LOAD_CACHE[key] = load_excel(p)
@@ -57,14 +57,19 @@ def _load_cases(file_arg: str):
 
 
 class _UiData:
-    """UI 文件下 excel_data 的替身：UI 无 Excel 全局变量表，variables 恒空。"""
+    """非 Excel 文件（UI/App）下 excel_data 的替身：无 Excel 全局变量表，variables 恒空。"""
     cases: list = []
     variables: dict = {}
 
 
 def _load_ui_cases(file_arg: str) -> list:
-    from backend import ui_case_store
+    from backend.ui import ui_case_store
     return ui_case_store.load_cases(Path(file_arg))
+
+
+def _load_app_cases(file_arg: str) -> list:
+    from backend.app import app_case_store
+    return app_case_store.load_cases(Path(file_arg))
 
 
 def _load_dep_map() -> dict:
@@ -139,6 +144,9 @@ def pytest_generate_tests(metafunc):
     """
     if "ui_case" in metafunc.fixturenames:
         _generate_ui_cases(metafunc)
+        return
+    if "app_case" in metafunc.fixturenames:
+        _generate_app_cases(metafunc)
         return
     if "api_case" not in metafunc.fixturenames:
         return
@@ -231,8 +239,53 @@ def _generate_ui_cases(metafunc):
     metafunc.parametrize("ui_case", selected, ids=[c.get("case_id", "") for c in selected])
 
 
+def _generate_app_cases(metafunc):
+    """App 用例参数化（来自项目 .apjson）：筛选与依赖拓扑口径与 UI 完全一致（run/module/priority/keyword/cases）。
+
+    阶段 3 仅搭脚手架：用例可被收集，执行由 test_app.py 统一 skip（Appium 驱动未接入）。
+    """
+    file_arg = metafunc.config.getoption("--file")
+    cases = _load_app_cases(file_arg)
+
+    module = metafunc.config.getoption("--module")
+    priority = metafunc.config.getoption("--priority")
+    keyword = metafunc.config.getoption("--keyword")
+    cases_opt = metafunc.config.getoption("--cases")
+    pri_set = {p.strip().upper() for p in priority.split(",") if p.strip()} if priority else None
+    id_set = {c.strip() for c in cases_opt.split(",") if c.strip()} if cases_opt else None
+
+    selected = []
+    for c in cases:
+        cid = c.get("case_id", "")
+        if id_set is not None:
+            if cid in id_set:
+                selected.append(c)
+            continue
+        if not c.get("run", True):
+            continue
+        if module and module not in str(c.get("module", "")):
+            continue
+        if pri_set and str(c.get("priority", "")).upper() not in pri_set:
+            continue
+        if keyword:
+            kw = keyword.strip().lower()
+            hay = " ".join([str(c.get(f, "")) for f in ("case_id", "name", "desc")]).lower()
+            if kw not in hay:
+                continue
+        selected.append(c)
+
+    if not selected:
+        hint = "--cases" if id_set is not None else "--file/--module/--priority/--keyword"
+        raise pytest.UsageError(f"没有匹配到任何 App 用例，请检查 {hint} 筛选条件")
+
+    dep_map = _load_dep_map()
+    if dep_map:
+        selected = _ui_topo_order(selected, dep_map)
+    metafunc.parametrize("app_case", selected, ids=[c.get("case_id", "") for c in selected])
+
+
 def _ui_topo_order(selected: list, dep_map: dict) -> list:
-    """UI 用例依赖拓扑排序（依赖先行，其余保持 JSON 原序）。"""
+    """UI/App 用例依赖拓扑排序（依赖先行，其余保持 JSON 原序）。"""
     by_id = {c.get("case_id"): c for c in selected}
     picked = set(by_id)
     ordered: list = []

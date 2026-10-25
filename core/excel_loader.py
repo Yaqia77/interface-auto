@@ -271,6 +271,23 @@ def _parse_case(file_name, row_no, raw, field_to_col, seen_ids, errors):
     )
 
 
+def validate_case(row: dict, *, file_name: str = "inline", row_no: int = 0) -> TestCase:
+    """校验并归一化单条接口用例：入参为 Excel「用例」表一行的 {字段名: 原值} dict。
+
+    复用 load() 逐行解析的同一套规则（_parse_case），任一字段非法即抛 ExcelFormatError；
+    供引擎统一校验入口（core.engines.api.ApiEngine.validate）调用。纯附加，不改变既有 load() 行为。
+    """
+    raw = dict(row)
+    field_to_col = {f: i for i, f in enumerate(raw)}
+    errors: list[str] = []
+    case = _parse_case(file_name, row_no, raw, field_to_col, {}, errors)
+    if errors:
+        raise ExcelFormatError(_join(errors))
+    if case is None:
+        raise ExcelFormatError(_join([f"用例校验未通过（{file_name} 第{row_no}行）"]))
+    return case
+
+
 def _parse_json_object(value, field, err):
     """解析必须为 JSON 对象的列，返回 dict / None；格式错误时记录 err 并返回 False 哨兵。"""
     if value in (None, ""):

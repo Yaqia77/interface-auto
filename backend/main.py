@@ -13,10 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from loguru import logger
 
-from backend import audit_store, authz, config_writer, scheduler, user_store
-from backend.routers import (api_defs, audit, auth, cases, dependencies, notifications,
-                             plans, projects, runs, schedules, scripts, secrets, ui_cases)
-from backend.schemas import EnvsUpdate, HealthOut
+from backend.api.routers import api_defs, cases, scripts
+from backend.app.routers import app_cases
+from backend.shared import audit_store, authz, config_writer, scheduler, user_store
+from backend.shared.routers import (audit, auth, dependencies, notifications,
+                                    plans, projects, runs, schedules, secrets)
+from backend.shared.schemas import EnvsUpdate, HealthOut
+from backend.ui.routers import ui_cases
 from core.context import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -48,6 +51,7 @@ app.include_router(schedules.router)
 app.include_router(scripts.router)
 app.include_router(secrets.router)
 app.include_router(ui_cases.router)
+app.include_router(app_cases.router)
 
 
 @app.middleware("http")

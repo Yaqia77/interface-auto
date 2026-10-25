@@ -13,7 +13,7 @@ env:
   test:
     base_url: https://test.yun.139.com/ai/album-saas-test
     timeout: 15
-    verify_ssl: false   # 公司网络 TLS 拦截/测试环境自签证书时关闭校验
+    verify_ssl: false
     default_headers:
       User-Agent: interface-auto/1.0
   algo:
@@ -22,6 +22,11 @@ env:
     verify_ssl: false
     default_headers:
       User-Agent: interface-auto/1.0
+  env_3:
+    base_url: https://test.yun.139.com
+    timeout: 15
+    verify_ssl: false
+    default_headers: {}
 
 # 报告开关
 report:

@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from core.ui_runner import UiRunner
+from core.engines import get_engine
 
 try:
     import allure
@@ -56,10 +56,12 @@ def test_ui(ui_case, app_config, context, dep_map, case_results):
             pytest.skip(f"因依赖用例未通过而阻塞: {', '.join(failed_deps)}")
 
     base_url = (app_config["env"] or {}).get("base_url", "")
-    runner = UiRunner(context, base_url,
-                      attach=(_attach_png if HAS_ALLURE else None),
-                      step=(_step_cm if HAS_ALLURE else None))
-    result = runner.run(ui_case)
+    # 统一执行入口：按 key 取引擎多态执行（内部委托 UiRunner，与旧直调完全一致）。
+    result = get_engine("web").execute(
+        ui_case, context, base_url=base_url,
+        attach=(_attach_png if HAS_ALLURE else None),
+        step=(_step_cm if HAS_ALLURE else None),
+    )
 
     if HAS_ALLURE:
         allure.attach(
