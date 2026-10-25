@@ -32,16 +32,31 @@
   </div>
 
   <script>
+    // 展示已登录态：显示结果区、用登录用户名回填欢迎语
+    function showLoggedIn(user) {
+      document.getElementById('who').textContent = user || '游客';
+      document.getElementById('result').classList.remove('hidden');
+    }
     document.getElementById('login-form').addEventListener('submit', function (e) {
       e.preventDefault();
       var u = document.getElementById('username').value || '游客';
-      document.getElementById('who').textContent = u;
-      document.getElementById('result').classList.remove('hidden');
+      showLoggedIn(u);
       document.title = '登录后-' + u;
-      // 登录后写入一个 cookie，供 cookie: 提取验证
+      // 登录后写入一个 cookie，供 cookie: 提取验证 + storage_state 往返
       document.cookie = 'session_token=abc123; path=/';
+      // 用户名存 localStorage，供「登录态复用」重开页面时渲染（storage_state 会带上它）
+      try { localStorage.setItem('ui_user', u); } catch (err) {}
       // 更新 URL 片段，供 expect_url 验证
       history.replaceState(null, '', '?logged_in=1#after-login');
+    });
+    // 开机即已登录：加载时若已有 session_token cookie（来自复用的 storage_state），直接渲染登录态，
+    // 无需再走「填账号→点登录」——这正是二期登录态复用要证明的效果。
+    window.addEventListener('load', function () {
+      if (/(?:^|; )session_token=/.test(document.cookie)) {
+        var u = '游客';
+        try { u = localStorage.getItem('ui_user') || '游客'; } catch (err) {}
+        showLoggedIn(u);
+      }
     });
   </script>
 </body>

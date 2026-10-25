@@ -54,6 +54,8 @@ export interface UiCaseItem {
   extract: UiExtract[];
   pre_scripts: string[];
   post_scripts: string[];
+  /** 引用的登录态会话 id（开机加载其 storage_state）；null/缺省=不引用 */
+  session?: string | null;
 }
 
 export interface UiCasePage {
@@ -74,6 +76,55 @@ export interface UiCaseMeta {
   browsers: string[];
   modules: string[];
   actions: UiActionMeta[];
+}
+
+/** UI 登录态会话派生状态（二期 storage_state 复用） */
+export type UiSessionStatusKind = "not_collected" | "valid" | "expired" | "failed";
+
+/** 一条登录态会话（/api/ui-sessions，注册表元数据 + 派生状态；不含 storage_state 实体） */
+export interface UiSession {
+  id: string;
+  name: string;
+  desc: string;
+  env: string;
+  browser: string;
+  headless: boolean;
+  file: string;
+  capture_case: string;
+  ttl_seconds: number;
+  created_at?: string | null;
+  captured_at?: string | null;
+  last_error?: string | null;
+  /** 列表视图附带（GET /api/ui-sessions）；详情/状态端点各自返回 */
+  status?: UiSessionStatusKind;
+  remaining_seconds?: number | null;
+}
+
+/** 单查状态（/api/ui-sessions/{id}/status） */
+export interface UiSessionStatus {
+  id: string;
+  status: UiSessionStatusKind;
+  captured_at?: string | null;
+  ttl_seconds: number;
+  remaining_seconds?: number | null;
+  last_error?: string | null;
+}
+
+/** 采集返回（POST /api/ui-sessions/{id}/collect） */
+export interface UiSessionCollectResult {
+  ok: boolean;
+  error: string | null;
+  id: string;
+  status: UiSessionStatusKind;
+  captured_at?: string | null;
+  remaining_seconds?: number | null;
+}
+
+/** 新建/编辑会话下拉候选（/api/ui-sessions/meta） */
+export interface UiSessionMeta {
+  envs: string[];
+  browsers: string[];
+  ui_projects: { file: string; name: string; cases: { case_id: string; name: string }[] }[];
 }
 
 /** App 变量提取（与 UiExtract 同构，source 面向移动端） */

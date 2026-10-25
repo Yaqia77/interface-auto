@@ -31,6 +31,13 @@ const router = createRouter({
       meta: { title: "用例管理" },
     },
     {
+      // 登录态页：查看仅需登录态，写操作（新建/编辑/删除/采集）靠页内 v-perm='session:manage' 门控
+      path: "/ui-sessions",
+      name: "ui-sessions",
+      component: () => import("../views/UiSessionsView.vue"),
+      meta: { title: "登录态" },
+    },
+    {
       path: "/defs",
       name: "defs",
       component: () => import("../views/ApiDefsView.vue"),

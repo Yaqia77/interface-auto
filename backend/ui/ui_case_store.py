@@ -177,6 +177,10 @@ def validate_case(raw: dict) -> dict:
             raise UiCaseError("invalid", f"{key} 必须是字符串数组")
         return [x.strip() for x in v if x.strip()]
 
+    # 引用登录态会话：仅规范化（strip，空串→None），不做存在性硬校验——
+    # 会话库读不到时用例仍应能被列出/保存（元数据非执行体），执行期由 session_collect 解析。
+    session = str(raw.get("session") or "").strip() or None
+
     return {
         "case_id": case_id,
         "module": str(raw.get("module") or "未分类").strip() or "未分类",
@@ -190,6 +194,7 @@ def validate_case(raw: dict) -> dict:
         "extract": clean_extract,
         "pre_scripts": _str_list("pre_scripts"),
         "post_scripts": _str_list("post_scripts"),
+        "session": session,
     }
 
 

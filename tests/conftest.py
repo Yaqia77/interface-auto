@@ -371,3 +371,14 @@ def dep_map():
 def case_results():
     """Session 级用例结果登记表，供依赖链检查。"""
     return {}  # {case_id: "passed" | "failed" | "skipped" | "error"}
+
+
+@pytest.fixture(scope="session")
+def ui_session_registry():
+    """UI 登录态会话的进程内登记表（二期复用，见设计文档步骤 4）。
+
+    后端批次是 subprocess 起 main.py（每批一个 pytest 进程），故「过期就地重采」只在本进程内去重：
+    同一会话在本进程最多重采一次，避免一批 100 条引用同一会话的用例触发 100 次重登。
+    结构由 backend.ui.session_collect 自管理：{"_locks": {key: Lock}, "_renewed": {key: True|err}}。
+    """
+    return {"_locks": {}, "_renewed": {}}

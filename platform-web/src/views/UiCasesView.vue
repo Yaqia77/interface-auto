@@ -9,7 +9,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiStep } from "../types";
+import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiStep, UiSession } from "../types";
 import UiStepEditor from "../components/UiStepEditor.vue";
 
 const props = defineProps<{
@@ -28,6 +28,7 @@ const cases = ref<UiCaseItem[]>([]);
 const total = ref(0);
 const meta = ref<UiCaseMeta | null>(null);
 const variables = ref<string[]>([]);
+const sessions = ref<UiSession[]>([]);   // 可引用的登录态会话（二期复用）
 const filters = reactive({ priority: [] as string[], keyword: "", onlyEnabled: false });
 const activeModule = ref("");   // "" = 全部
 const pageSize = ref(10);
@@ -44,6 +45,8 @@ async function loadMeta() {
     const v = await api.getUiCaseVariables(props.file);
     variables.value = [...(v.excel_variables ?? []), ...(v.secret_variables ?? [])];
   } catch { /* 拦截器已提示 */ }
+  // 会话库是全局资源，与项目无关；拉一次供「引用登录态」下拉
+  try { sessions.value = await api.listUiSessions(); } catch { sessions.value = []; }
 }
 
 async function search() {
@@ -148,7 +151,7 @@ const mode = ref<"create" | "edit">("create");
 const editingId = ref("");
 const form = reactive({
   case_id: "", module: "", name: "", desc: "", priority: "P2",
-  run: true, browser: "chromium", headless: true,
+  run: true, browser: "chromium", headless: true, session: "",
 });
 const steps = ref<UiStep[]>([]);
 const extractRows = ref<KvRow[]>([]);
@@ -157,10 +160,15 @@ const browserOptions = computed(() => meta.value?.browsers ?? ["chromium"]);
 const prioOptions = computed(() => meta.value?.priorities ?? ["P0", "P1", "P2", "P3", "P4", "P5"]);
 const moduleOptions = computed(() => meta.value?.modules ?? []);
 
+// 会话状态中文标签（供「引用登录态」下拉标注可用性）
+function statusLabel(s?: string) {
+  return { valid: "🟢有效", expired: "🟡已过期", not_collected: "⚪未采集", failed: "🔴采集失败" }[s ?? ""] ?? "—";
+}
+
 function blankCase() {
   mode.value = "create";
   editingId.value = "";
-  Object.assign(form, { case_id: "", module: activeModule.value || "", name: "", desc: "", priority: "P2", run: true, browser: "chromium", headless: true });
+  Object.assign(form, { case_id: "", module: activeModule.value || "", name: "", desc: "", priority: "P2", run: true, browser: "chromium", headless: true, session: "" });
   steps.value = [{ action: "goto", value: "/" }];
   extractRows.value = [];
   editVisible.value = true;
@@ -172,6 +180,7 @@ function fillFrom(c: UiCaseItem) {
   Object.assign(form, {
     case_id: c.case_id, module: c.module, name: c.name, desc: c.desc,
     priority: c.priority, run: c.run, browser: c.browser, headless: c.headless,
+    session: c.session ?? "",
   });
   steps.value = (c.steps ?? []).map((s) => ({ ...s }));
   extractRows.value = (c.extract ?? []).map((e) => ({ key: e.var, value: e.source }));
@@ -214,7 +223,7 @@ async function saveCase() {
     case_id: form.case_id.trim(), module: form.module.trim() || "未分类",
     name: form.name.trim() || "新建UI用例", desc: form.desc.trim(),
     priority: form.priority, run: form.run, browser: form.browser, headless: form.headless,
-    steps: steps.value, extract,
+    steps: steps.value, extract, session: form.session.trim() || null,
   };
   saving.value = true;
   try {
@@ -407,6 +416,19 @@ watch(
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item label="引用登录态">
+          <el-select v-model="form.session" clearable filterable placeholder="不引用（用例自带登录步骤）" style="width: 100%">
+            <el-option v-for="s in sessions" :key="s.id" :value="s.id"
+              :label="`${s.name}（${s.env}/${s.id}｜${statusLabel(s.status)}）`" />
+          </el-select>
+          <div v-if="form.session" class="hint" style="margin: 6px 0 0">
+            本用例开机即带登录态（加载所选会话的 storage_state），步骤里无需重复「打开登录页→填账号→点登录」。
+          </div>
+          <div v-else-if="!sessions.length" class="hint" style="margin: 6px 0 0">
+            尚无可用登录态会话，可在侧栏「🔐 登录态」页采集后回来引用。
+          </div>
+        </el-form-item>
 
         <el-divider content-position="left">操作步骤（按序执行，失败即中断并截图）</el-divider>
         <UiStepEditor v-model="steps" :actions="meta?.actions ?? []" :variables="variables" />

@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, AppCaseItem, AppCasePage, AppCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
+import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, UiSession, UiSessionStatus, UiSessionCollectResult, UiSessionMeta, AppCaseItem, AppCasePage, AppCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -199,6 +199,33 @@ export const api = {
     http.post<{ moved: string; from_file: string; to_file: string; case: UiCaseItem }>(
       `/ui-cases/${encodeURIComponent(caseId)}/move`, body, { params: { file } }
     ).then((r) => r.data),
+
+  /* ---------- UI 登录态会话（二期 storage_state 复用，全局注册表，走 /api/ui-sessions） ---------- */
+  listUiSessions: () => http.get<UiSession[]>("/ui-sessions").then((r) => r.data),
+
+  getUiSession: (id: string) =>
+    http.get<UiSession>(`/ui-sessions/${encodeURIComponent(id)}`).then((r) => r.data),
+
+  getUiSessionStatus: (id: string) =>
+    http.get<UiSessionStatus>(`/ui-sessions/${encodeURIComponent(id)}/status`).then((r) => r.data),
+
+  getUiSessionMeta: () =>
+    http.get<UiSessionMeta>("/ui-sessions/meta").then((r) => r.data),
+
+  createUiSession: (body: Record<string, unknown>) =>
+    http.post<UiSession>("/ui-sessions", body).then((r) => r.data),
+
+  updateUiSession: (id: string, changes: Record<string, unknown>) =>
+    http.put<UiSession>(`/ui-sessions/${encodeURIComponent(id)}`, changes).then((r) => r.data),
+
+  deleteUiSession: (id: string) =>
+    http.delete<{ deleted: string; entity_removed: string | null }>(
+      `/ui-sessions/${encodeURIComponent(id)}`
+    ).then((r) => r.data),
+
+  /** 立即采集/刷新登录态（同步跑采集用例导出 storage_state，需浏览器内核就绪） */
+  collectUiSession: (id: string) =>
+    http.post<UiSessionCollectResult>(`/ui-sessions/${encodeURIComponent(id)}/collect`).then((r) => r.data),
 
   /* ---------- App 用例（项目 kind=app，载体 .apjson，走 /api/app-cases；阶段 3 预留位） ---------- */
   listAppCases: (params: {

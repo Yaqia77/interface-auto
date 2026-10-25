@@ -19,7 +19,7 @@ from backend.shared import audit_store, authz, config_writer, scheduler, user_st
 from backend.shared.routers import (audit, auth, dependencies, notifications,
                                     plans, projects, runs, schedules, secrets)
 from backend.shared.schemas import EnvsUpdate, HealthOut
-from backend.ui.routers import ui_cases
+from backend.ui.routers import ui_cases, ui_sessions
 from core.context import load_config
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,6 +51,7 @@ app.include_router(schedules.router)
 app.include_router(scripts.router)
 app.include_router(secrets.router)
 app.include_router(ui_cases.router)
+app.include_router(ui_sessions.router)
 app.include_router(app_cases.router)
 
 

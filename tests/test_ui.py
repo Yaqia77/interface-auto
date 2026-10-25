@@ -37,7 +37,7 @@ def _attach_png(name, data):
         allure.attach(name=name, body=data, attachment_type=allure.attachment_type.PNG)
 
 
-def test_ui(ui_case, app_config, context, dep_map, case_results):
+def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_registry):
     if HAS_ALLURE:
         allure.dynamic.title(f"[{ui_case.get('priority')}] {ui_case.get('case_id')} {ui_case.get('name')}")
         allure.dynamic.feature(ui_case.get("module", ""))
@@ -57,10 +57,15 @@ def test_ui(ui_case, app_config, context, dep_map, case_results):
 
     base_url = (app_config["env"] or {}).get("base_url", "")
     # 统一执行入口：按 key 取引擎多态执行（内部委托 UiRunner，与旧直调完全一致）。
+    # 二期登录态复用：注入 session_provider 把 case.session 解析成可加载的 storage_state；
+    # 未引用会话的存量用例 provider 返回 (None, None)，行为与 v1 完全一致。
+    from backend.ui import session_collect
+
     result = get_engine("web").execute(
         ui_case, context, base_url=base_url,
         attach=(_attach_png if HAS_ALLURE else None),
         step=(_step_cm if HAS_ALLURE else None),
+        session_provider=lambda c: session_collect.resolve_for_attach(c, ui_session_registry),
     )
 
     if HAS_ALLURE:

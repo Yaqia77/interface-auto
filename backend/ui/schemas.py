@@ -38,6 +38,7 @@ class UiCaseOut(BaseModel):
     extract: list[UiExtract] = Field(default_factory=list)
     pre_scripts: list[str] = Field(default_factory=list)
     post_scripts: list[str] = Field(default_factory=list)
+    session: str | None = Field(default=None, description="引用的登录态会话 id（开机加载其 storage_state）")
 
 
 class UiCasePage(BaseModel):
@@ -60,6 +61,7 @@ class UiCaseCreate(BaseModel):
     extract: list[UiExtract] = Field(default_factory=list)
     pre_scripts: list[str] = Field(default_factory=list)
     post_scripts: list[str] = Field(default_factory=list)
+    session: str | None = Field(default=None, description="引用的登录态会话 id（可选）")
 
 
 class UiCaseUpdate(BaseModel):
@@ -76,6 +78,7 @@ class UiCaseUpdate(BaseModel):
     extract: list[UiExtract] | None = None
     pre_scripts: list[str] | None = None
     post_scripts: list[str] | None = None
+    session: str | None = Field(default=None, description="引用的登录态会话 id（传空串=取消引用）")
 
 
 class UiCaseMove(BaseModel):
@@ -83,3 +86,50 @@ class UiCaseMove(BaseModel):
 
     to_file: str = Field(description="目标 UI 项目的用例 JSON 路径（相对项目根）")
     new_module: str | None = Field(default=None, description="迁移后归入的模块名（留空=保留原模块）")
+
+
+# ==================== UI 登录态会话（二期 storage_state 复用，全局注册表） ====================
+
+
+class UiSessionOut(BaseModel):
+    """一条登录态会话（注册表元数据 + 运行态；绝不包含 storage_state 实体内容）。"""
+
+    id: str
+    name: str
+    desc: str = ""
+    env: str
+    browser: str = "chromium"
+    headless: bool = True
+    file: str
+    capture_case: str
+    ttl_seconds: int = 3600
+    created_at: str | None = None
+    captured_at: str | None = None
+    last_error: str | None = None
+
+
+class UiSessionCreate(BaseModel):
+    """新建登录态会话（id 唯一；env 必须存在于 config.yaml；capture_case 为一条 UI 用例编号）。"""
+
+    id: str = Field(description="会话唯一名（不含 / \\ ? # 与换行，直接寻址 + 参与实体文件名）")
+    env: str = Field(description="绑定环境名（决定 base_url/域名归属）")
+    file: str = Field(description="采集用例所在的 UI 项目 JSON 路径（相对项目根）")
+    capture_case: str = Field(description="采集登录态的用例编号（登录成功后导出 storage_state）")
+    name: str = Field(default="新建登录态", description="会话名称")
+    desc: str = Field(default="", description="描述")
+    browser: str = Field(default="chromium", description="chromium/firefox/webkit")
+    headless: bool = Field(default=True, description="采集时无头开关")
+    ttl_seconds: int = Field(default=3600, description="复用有效期秒（<=0=永不过期，仅手动采集）")
+
+
+class UiSessionUpdate(BaseModel):
+    """更新会话（只传需改字段；id 不可改）。改 env/browser/file/capture_case/ttl_seconds 会作废旧登录态。"""
+
+    name: str | None = None
+    desc: str | None = None
+    env: str | None = None
+    browser: str | None = None
+    headless: bool | None = None
+    file: str | None = None
+    capture_case: str | None = None
+    ttl_seconds: int | None = None
