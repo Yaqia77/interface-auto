@@ -32,6 +32,18 @@ const isExpect = (action: string) => action.startsWith("expect_");
 const LOC_PH = "定位器，如 #username / css=.btn / xpath=//div / role=button,name=登录";
 const VAL_PH = "取值，支持 {{变量}} 引用";
 
+// 五期：动作自带 hint 优先作为对应输入框占位提示（如 upload 取值=文件路径、
+// switch_frame 定位器=iframe 选择器、expect_attr 取值=属性名=期望值）。无 hint 时用通用占位。
+// hint 是单字段：仅当该动作「只需定位器不需取值」时判定它描述定位器，否则描述取值。
+const locatorPh = (action: string) => {
+  const m = metaOf(action);
+  return m?.hint && m.need_locator && !m.need_value ? m.hint : LOC_PH;
+};
+const valuePh = (action: string) => {
+  const m = metaOf(action);
+  return m?.hint && m.need_value ? m.hint : VAL_PH;
+};
+
 const toRow = (s: UiStep): StepRow => ({
   action: s.action ?? "",
   locator: s.locator == null ? "" : String(s.locator),
@@ -137,6 +149,9 @@ function locatorHint(loc: string): { text: string; type: string } {
   if (l.startsWith("xpath=")) return { text: "按 XPath 解析", type: "success" };
   if (l.startsWith("text=")) return { text: "按可见文本匹配", type: "success" };
   if (l.startsWith("role=")) return { text: "按 ARIA 角色+名称定位（get_by_role）", type: "success" };
+  if (l.startsWith("testid=")) return { text: "按 data-testid 稳定标识定位（get_by_test_id）", type: "success" };
+  if (l.startsWith("placeholder=")) return { text: "按输入框占位文本定位（get_by_placeholder）", type: "success" };
+  if (l.startsWith("alt=")) return { text: "按图片 alt 文本定位（get_by_alt_text）", type: "success" };
   if (l.startsWith("//") || l.startsWith("(")) return { text: "看起来是 XPath，建议加 xpath= 前缀", type: "warning" };
   return { text: "将按 CSS 选择器解析", type: "info" };
 }
@@ -182,7 +197,7 @@ function locatorHint(loc: string): { text: string; type: string } {
 
       <div class="step-body">
         <template v-if="needLocator(r.action) || r.locator">
-          <el-input v-model="r.locator" :placeholder="LOC_PH" class="mono" clearable>
+          <el-input v-model="r.locator" :placeholder="locatorPh(r.action)" class="mono" clearable>
             <template #prepend>定位器</template>
           </el-input>
           <div class="loc-hint" :class="'loc-' + locatorHint(r.locator).type">{{ locatorHint(r.locator).text }}</div>
@@ -190,7 +205,7 @@ function locatorHint(loc: string): { text: string; type: string } {
         <el-input
           v-if="needValue(r.action) || r.value"
           v-model="r.value"
-          :placeholder="VAL_PH"
+          :placeholder="valuePh(r.action)"
           class="mono"
           @focus="focusRow = i"
         >
@@ -206,7 +221,8 @@ function locatorHint(loc: string): { text: string; type: string } {
 
     <div class="hint" style="margin: 10px 0 0">
       定位器前缀：<span class="mono">css=</span>（默认，可省略）/ <span class="mono">xpath=</span> /
-      <span class="mono">text=</span> / <span class="mono">role=button,name=登录</span>；
+      <span class="mono">text=</span> / <span class="mono">role=button,name=登录</span> /
+      <span class="mono">testid=login-btn</span> / <span class="mono">placeholder=请输入用户名</span> / <span class="mono">alt=头像</span>；
       <span class="mono">goto</span> 的取值填相对路径（自动拼环境 base_url）或完整 URL。
     </div>
     <div v-if="variables?.length" class="var-chips">

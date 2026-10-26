@@ -316,3 +316,86 @@ def test_normalize_bool(raw, expect):
 def test_normalize_bool_default():
     assert store.normalize_bool("乱填", default=True) is True
     assert store.normalize_bool("乱填", default=False) is False
+
+
+# ==================== 五期：动作扩展校验 / meta hint / 新定位前缀 ====================
+
+P5_NEW_ACTIONS = {
+    "uncheck", "dblclick", "upload", "right_click", "scroll_to", "drag_to", "navigate",
+    "wait_load", "wait_state", "sleep", "expect_hidden", "expect_count", "expect_value",
+    "expect_attr", "expect_enabled", "expect_title", "switch_frame", "switch_main", "switch_window",
+}
+
+
+def test_p5_actions_registered_baseline():
+    assert P5_NEW_ACTIONS <= set(store.VALID_ACTIONS)
+    assert len(store.ACTIONS) == 31          # 五期基线：12 → 31，新动作只增不减
+    assert len(store.VALID_ACTIONS) == len(store.ACTIONS)
+
+
+@pytest.mark.parametrize("action", sorted(P5_NEW_ACTIONS))
+def test_p5_meta_contains_action_with_hint_field(action):
+    m = store.meta(Path("__none__.json"))
+    by = {a["action"]: a for a in m["actions"]}
+    assert action in by
+    assert "hint" in by[action]              # 每条都下发 hint（可为空串）
+
+
+def test_p5_meta_need_locator_value_matches_definition():
+    # meta 下发的 need_locator/need_value 必须与 ACTIONS 定义同口径（单一事实源）
+    by = {a["action"]: a for a in store.meta(Path("__none__.json"))["actions"]}
+    for act, meta in store.ACTIONS.items():
+        assert by[act]["need_locator"] == meta["locator"], act
+        assert by[act]["need_value"] == meta["value"], act
+
+
+def test_p5_hint_present_on_special_actions():
+    by = {a["action"]: a for a in store.meta(Path("__none__.json"))["actions"]}
+    # 取值/定位有特殊语义的动作必须带非空 hint（编辑器据此做占位提示）
+    for act in ("upload", "drag_to", "expect_attr", "switch_frame", "wait_load", "switch_window"):
+        assert by[act]["hint"], act
+
+
+def test_p5_step_validate_pass_and_missing():
+    def ok(step):
+        assert store.validate_case(_case(steps=[step]))["steps"][0]["action"] == step["action"]
+
+    ok({"action": "upload", "locator": "#file", "value": "a.txt"})
+    ok({"action": "drag_to", "locator": "#src", "value": "#dst"})
+    ok({"action": "wait_state", "locator": "#x", "value": "visible"})
+    ok({"action": "expect_attr", "locator": "#a", "value": "href=/x"})
+    ok({"action": "expect_count", "locator": ".item", "value": "3"})
+    ok({"action": "navigate", "value": "back"})
+    ok({"action": "sleep", "value": "1000"})
+    ok({"action": "expect_title", "value": "首页"})
+    ok({"action": "switch_window", "value": "last"})
+    ok({"action": "uncheck", "locator": "#agree"})
+    ok({"action": "switch_frame", "locator": "#app-frame"})
+    ok({"action": "switch_main"})
+    # 需定位器却缺 → invalid
+    for step in ({"action": "upload", "value": "a.txt"}, {"action": "uncheck"}, {"action": "switch_frame"}):
+        with pytest.raises(UiCaseError):
+            store.validate_case(_case(steps=[step]))
+    # 需取值却缺 → invalid
+    for step in ({"action": "upload", "locator": "#f"}, {"action": "navigate"}, {"action": "sleep"}):
+        with pytest.raises(UiCaseError):
+            store.validate_case(_case(steps=[step]))
+
+
+@pytest.mark.parametrize("loc", [
+    "testid=login", "placeholder=搜索", "alt=头像",
+    "role=button,name=登录", "css=#a", "xpath=//div", "text=你好", "#bare",
+])
+def test_p5_locator_prefix_accepted(loc):
+    assert store._validate_locator(loc, 1) == loc
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ("取消勾选", "uncheck"), ("双击", "dblclick"), ("上传", "upload"), ("拖拽", "drag_to"),
+    ("刷新", "navigate"), ("等待加载", "wait_load"), ("等待状态", "wait_state"), ("固定等待", "sleep"),
+    ("断言不可见", "expect_hidden"), ("断言数量", "expect_count"), ("断言属性", "expect_attr"),
+    ("断言标题", "expect_title"), ("切入iframe", "switch_frame"), ("回主文档", "switch_main"),
+    ("切换标签", "switch_window"),
+])
+def test_p5_alias_normalize(raw, expect):
+    assert store.normalize_action(raw) == expect

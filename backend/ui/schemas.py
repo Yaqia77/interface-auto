@@ -10,14 +10,14 @@ from pydantic import BaseModel, Field
 class UiStep(BaseModel):
     """一个 UI 步骤：动作 + 定位器 + 取值（三者必要性由动作决定，见 ui_case_store.ACTIONS）。"""
 
-    action: str = Field(description="动作：goto/click/fill/press/select/check/hover/wait_for/screenshot/expect_visible/expect_text/expect_url")
-    locator: str | None = Field(default=None, description="定位器：css=(缺省)/xpath=/text=/role= 前缀")
+    action: str = Field(description="动作键（完整集合与中文名见 ui_case_store.ACTIONS，随 /api/ui-cases/meta 下发；如 goto/click/fill/upload/drag_to/switch_frame/expect_* 等）")
+    locator: str | None = Field(default=None, description="定位器：css=(缺省)/xpath=/text=/role=/testid=/placeholder=/alt= 前缀")
     value: Any = Field(default=None, description="取值/期望值（支持 {{var}} 变量）")
     desc: str = Field(default="", description="步骤备注")
 
 
 class UiExtract(BaseModel):
-    """变量提取：source 形如 text|<locator> / input_value|<locator> / cookie:<name>。"""
+    """变量提取：source 形如 text|<locator> / input_value|<locator> / value|<locator> / attr|<sel>:<name> / url / title / storage:<key> / cookie:<name>。"""
 
     var: str = Field(description="变量名")
     source: str = Field(description="提取来源表达式")

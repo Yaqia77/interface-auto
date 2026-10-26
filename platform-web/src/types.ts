@@ -71,6 +71,8 @@ export interface UiActionMeta {
   desc: string;
   need_locator: boolean;
   need_value: boolean;
+  /** 定位器/取值填写说明（编辑器对应输入框 placeholder），可缺省 */
+  hint?: string;
   /** 下拉分组：常用（新手优先）/ 高级；缺省按高级归类 */
   group?: string;
 }

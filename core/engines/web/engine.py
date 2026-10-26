@@ -95,6 +95,13 @@ def _resolve_locator(page, locator: str):
                 elif k in ("exact",):
                     kwargs["exact"] = v.lower() == "true"
         return page.get_by_role(role, **kwargs)
+    # 五期 P3 稳定标识方言：testid/placeholder/alt 走 Playwright 语义化 getter（Page 与 Frame 均支持）
+    if locator.startswith("testid="):
+        return page.get_by_test_id(locator[len("testid="):].strip())
+    if locator.startswith("placeholder="):
+        return page.get_by_placeholder(locator[len("placeholder="):].strip())
+    if locator.startswith("alt="):
+        return page.get_by_alt_text(locator[len("alt="):].strip())
     # css= 去掉前缀（css 是默认引擎）；xpath= / text= 保留原样交给 locator()
     if locator.startswith("css="):
         return page.locator(locator[len("css="):])
@@ -126,6 +133,24 @@ _MISSING_KERNEL_HINTS = (
 def _looks_missing_kernel(msg: str) -> bool:
     low = (msg or "").lower()
     return any(h in low for h in _MISSING_KERNEL_HINTS)
+
+
+# 项目根（core/engines/web/engine.py 上溯三级）：供 upload 相对路径解析
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _accept_dialog(dialog) -> None:
+    """五期 P4：默认放行原生 dialog（alert/confirm/beforeunload）；无法 accept 时静默。"""
+    try:
+        dialog.accept()
+    except Exception:  # noqa: BLE001 dialog 已被处理/页面关闭均忽略
+        pass
+
+
+def _resolve_local_path(value: str) -> str:
+    """upload 取值路径：绝对路径原样，相对按项目根 join（测试平台在本机取文件，不做沙箱）。"""
+    p = Path(value)
+    return str(p if p.is_absolute() else _PROJECT_ROOT / p)
 
 
 class UiRunner:
@@ -161,6 +186,12 @@ class UiRunner:
         self.attempt = max(1, int(attempt))
         # 截图名中的用例标识（run() 开头从 case 回填）：不同用例同名步骤截图不再互相覆盖
         self._case_tag = ""
+        # 五期 P4「活动 target」模型：self.page=当前根标签页（页面级动作作用域），
+        # self.target=当前定位作用对象（Page 或 Frame），定位/断言/提取都在其上解析。
+        # 初始 target is page；未用 switch_frame/switch_window 时与四期行为逐条等价（向后兼容底线）。
+        self.page = None
+        self.target = None
+        self._context = None
 
     def _step_cm(self, label: str):
         return self._step(label) if self._step else nullcontext()
@@ -200,21 +231,25 @@ class UiRunner:
             page = context.new_page()
             page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
             self.page = page
+            self.target = page
             self._context = context
+            # 五期 P4：默认放行原生 dialog（alert/confirm/beforeunload），多数流程需点“确定”；
+            # 此前 Playwright 默认 dismiss 会静默取消。需 dismiss 的场景留后续显式动作。
+            page.on("dialog", _accept_dialog)
 
             steps = case.get("steps") or []
             for i, step in enumerate(steps, 1):
-                result.steps.append(self._run_step(page, step, i))
+                result.steps.append(self._run_step(step, i))
                 if result.steps[-1]["ok"] is False:
                     # 失败即截全屏并中断后续步骤
-                    self._capture(page, result.steps[-1], f"步骤{i}失败")
+                    self._capture(result.steps[-1], f"步骤{i}失败")
                     break
 
             steps_ok = all(s["ok"] for s in result.steps)
 
             # 变量提取（仅在未失败时进行）
             if steps_ok:
-                self._extract(page, case.get("extract") or [], result)
+                self._extract(case.get("extract") or [], result)
 
             # 采集模式：步骤全部成功 = 已完成登录，导出 storage_state 交回写器落盘
             if self.mode == "collect" and steps_ok:
@@ -231,7 +266,7 @@ class UiRunner:
                                "action_desc": "终态截图（自动）", "locator": None, "value": "",
                                "desc": "", "ok": True, "duration_ms": 0,
                                "error": None, "screenshot": None}
-                self._capture(page, final_entry, "终态")
+                self._capture(final_entry, "终态")
                 result.steps.append(final_entry)
         except UiRunnerError as e:
             result.error = str(e)
@@ -239,7 +274,7 @@ class UiRunner:
         except Exception as e:  # noqa: BLE001 浏览器/动作异常兜底为用例失败
             result.error = f"UI 执行异常: {type(e).__name__}: {e}"
             if page is not None:
-                self._capture(page, (result.steps[-1] if result.steps else {}), "异常现场")
+                self._capture((result.steps[-1] if result.steps else {}), "异常现场")
             logger.error("[{}] UI 执行异常: {}", case.get("case_id"), e)
             # 崩溃/断连类异常：标记该束已死，下一条用例 acquire 时自动换新（环境噪声不累积）
             if use_pool and bundle is not None and _looks_browser_dead(result.error):
@@ -357,7 +392,7 @@ class UiRunner:
 
     # ---------- 单步 ----------
 
-    def _run_step(self, page, step: dict, index: int) -> dict:
+    def _run_step(self, step: dict, index: int) -> dict:
         action = step.get("action")
         raw_locator = step.get("locator")
         raw_value = step.get("value")
@@ -373,8 +408,9 @@ class UiRunner:
             with self._step_cm(label):
                 # 变量替换只作用于取值与地址类定位（定位器一般静态）
                 value = render(raw_value, self.ctx) if isinstance(raw_value, str) else raw_value
-                locator = _resolve_locator(page, raw_locator) if raw_locator else None
-                self._dispatch(page, locator, action, value, entry)
+                # 定位在“活动 target”（Page 或 Frame）上解析；页面级动作另走 self.page
+                locator = _resolve_locator(self.target, raw_locator) if raw_locator else None
+                self._dispatch(locator, action, value, entry)
                 entry["ok"] = True
         except Exception as e:  # noqa: BLE001 单步失败：记录 + 截图，不炸整条
             entry["error"] = f"{type(e).__name__}: {str(e).splitlines()[0] if str(e) else e}"[:400]
@@ -383,11 +419,17 @@ class UiRunner:
             entry["duration_ms"] = int((time.perf_counter() - t0) * 1000)
         return entry
 
-    def _dispatch(self, page, locator, action: str, value, entry: dict) -> None:
+    def _dispatch(self, locator, action: str, value, entry: dict) -> None:
+        page = self.page
+        # 定位/断言/提取类走 self.target；页面级（goto/navigate/等待/url/标题/截图）走 self.page
         if action == "goto":
             page.goto(_join_url(str(value), self.base_url))
         elif action == "click":
             locator.click()
+        elif action == "dblclick":
+            locator.dblclick()
+        elif action == "right_click":
+            locator.click(button="right")
         elif action == "fill":
             locator.fill("" if value is None else str(value))
         elif action == "press":
@@ -396,53 +438,142 @@ class UiRunner:
             locator.select_option(label=str(value))
         elif action == "check":
             locator.check()
+        elif action == "uncheck":
+            locator.uncheck()
         elif action == "hover":
             locator.hover()
+        elif action == "scroll_to":
+            locator.scroll_into_view_if_needed()
+        elif action == "upload":
+            locator.set_input_files(_resolve_local_path(str(value)))
+        elif action == "drag_to":
+            if not value:
+                raise UiRunnerError("拖拽需要取值：目标元素定位器")
+            locator.drag_to(_resolve_locator(self.target, str(value)))
         elif action == "wait_for":
             locator.wait_for(state="visible")
+        elif action == "wait_state":
+            state = str(value).strip().lower()
+            if state not in ("visible", "hidden", "attached", "detached"):
+                raise UiRunnerError(f"等待元素状态非法: {state!r}（可用 visible/hidden/attached/detached）")
+            locator.wait_for(state=state)
+        elif action == "wait_load":
+            st = str(value).strip().lower()
+            if st not in ("load", "domcontentloaded", "networkidle"):
+                raise UiRunnerError(f"等待加载状态非法: {st!r}（可用 load/domcontentloaded/networkidle）")
+            page.wait_for_load_state(st)
+        elif action == "sleep":
+            try:
+                ms = int(float(value))
+            except (TypeError, ValueError):
+                raise UiRunnerError(f"固定等待毫秒数非法: {value!r}")
+            page.wait_for_timeout(max(0, ms))
+        elif action == "navigate":
+            op = str(value).strip().lower()
+            if op == "back":
+                page.go_back()
+            elif op == "forward":
+                page.go_forward()
+            elif op == "reload":
+                page.reload()
+            else:
+                raise UiRunnerError(f"导航动作非法: {op!r}（可用 back/forward/reload）")
+        elif action == "switch_frame":
+            handle = locator.element_handle()
+            frame = handle.content_frame() if handle else None
+            if frame is None:
+                raise UiRunnerError("定位器未指向含 iframe 的元素，无法切入帧")
+            self.target = frame
+        elif action == "switch_main":
+            self.target = page
+        elif action == "switch_window":
+            pages = self._context.pages if self._context else [page]
+            sel = str(value).strip().lower()
+            if sel == "last":
+                idx = len(pages) - 1
+            else:
+                try:
+                    idx = int(sel)
+                except ValueError:
+                    raise UiRunnerError(f"切换标签页取值非法: {value!r}（应为序号或 last）")
+            if not (0 <= idx < len(pages)):
+                raise UiRunnerError(f"标签页序号 {idx} 越界（当前共 {len(pages)} 个）")
+            self.page = pages[idx]
+            self.target = self.page
         elif action == "screenshot":
             # 显式截图：有定位器截元素，否则截整页；结果记入当前步骤轨迹
-            self._capture(page, entry, "手动", locator=locator)
+            self._capture(entry, "手动", locator=locator)
         elif action == "expect_visible":
             _expect(locator.is_visible(), "元素不可见")
+        elif action == "expect_hidden":
+            _expect(not locator.is_visible(), "元素仍可见")
+        elif action == "expect_enabled":
+            _expect(locator.is_enabled(), "元素不可交互")
         elif action == "expect_text":
             txt = locator.inner_text()
             _expect(str(value) in txt, f"文本不含期望值：期望包含 {value!r}，实际 {txt!r}")
+        elif action == "expect_count":
+            try:
+                want = int(float(value))
+            except (TypeError, ValueError):
+                raise UiRunnerError(f"断言元素数量取值非法: {value!r}")
+            got = locator.count()
+            _expect(got == want, f"元素数量期望 {want}，实际 {got}")
+        elif action == "expect_value":
+            actual = locator.input_value()
+            _expect(str(value) == actual, f"输入值期望 {value!r}，实际 {actual!r}")
+        elif action == "expect_attr":
+            name, sep, want = str(value).partition("=")
+            if not sep:
+                raise UiRunnerError(f"断言属性取值需 '属性名=期望值'，实际 {value!r}")
+            actual = locator.get_attribute(name.strip())
+            _expect(actual == want, f"属性 {name.strip()!r} 期望 {want!r}，实际 {actual!r}")
         elif action == "expect_url":
             _expect(str(value) in page.url, f"当前地址 {page.url!r} 不含期望 {value!r}")
+        elif action == "expect_title":
+            title = page.title()
+            _expect(str(value) in title, f"标题 {title!r} 不含期望 {value!r}")
         else:
             raise UiRunnerError(f"未知动作: {action}")
 
     # ---------- 变量提取 ----------
 
-    def _extract(self, page, extract: list, result: UiRunResult) -> None:
+    def _extract(self, extract: list, result: UiRunResult) -> None:
         for item in extract:
             var = item.get("var")
             source = item.get("source", "")
-            value = self._read_source(page, source)
+            value = self._read_source(source)
             if value is not None:
                 self.ctx.set(var, value)
                 result.extracted[var] = value
                 logger.info("[{}] 变量提取 {}={}", result.case_id, var, value)
 
-    def _read_source(self, page, source: str):
-        """source 语法：text|<locator> / input_value|<locator> / cookie:<name> / url。"""
+    def _read_source(self, source: str):
+        """source 语法：url / title / cookie:<name> / storage:<key> / text|<locator> / input_value|<locator> / attr|<sel>:<name>。
+
+        定位类来源在“活动 target”（Page 或 Frame）上解析；url/title/storage 属页面级，取 self.page。
+        """
         source = (source or "").strip()
         if source == "url":
-            return page.url
+            return self.page.url
+        if source == "title":
+            return self.page.title()
         if source.startswith("cookie:"):
             name = source[len("cookie:"):].strip()
-            for ck in page.context.cookies():
+            for ck in self.page.context.cookies():
                 if ck.get("name") == name:
                     return ck.get("value")
             return None
+        if source.startswith("storage:"):
+            key = source[len("storage:"):].strip()
+            return self.page.evaluate("(k) => localStorage.getItem(k)", key)
         if "|" in source:
             kind, _, loc = source.partition("|")
-            locator = _resolve_locator(page, loc.strip())
+            locator = _resolve_locator(self.target, loc.strip())
             kind = kind.strip()
             if kind == "text":
                 return locator.inner_text()
-            if kind == "input_value":
+            if kind in ("input_value", "value"):
                 return locator.input_value()
             if kind == "attr":
                 # attr|css=#x:data-id 形式取属性
@@ -453,15 +584,16 @@ class UiRunner:
 
     # ---------- 截图 ----------
 
-    def _capture(self, page, entry: dict, name_suffix: str, locator=None) -> None:
+    def _capture(self, entry: dict, name_suffix: str, locator=None) -> None:
         """截当前步现场：默认落盘 output_dir；有 allure 钩子则同时作为附件写入。
 
+        整页截图作用于 self.page（当前活动标签页）；元素截图作用于传入的 locator。
         任一途径成功即把截图名记入步骤轨迹（供报告页回指）；截图失败不影响执行结论。
         """
-        if entry is None:
+        if entry is None or self.page is None:
             return
         try:
-            target = locator if locator is not None else page
+            target = locator if locator is not None else self.page
             png = target.screenshot(full_page=(locator is None))
             prefix = f"第{self.attempt}试-" if self.attempt > 1 else ""  # retry=0 存量命名不变
             tag = f"{self._case_tag}-" if self._case_tag else ""  # 用例隔离：跨用例同序号截图不互盖

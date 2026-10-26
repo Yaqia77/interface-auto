@@ -28,6 +28,9 @@ class FakePage:
     def set_default_timeout(self, ms):
         pass
 
+    def on(self, event, handler):
+        pass  # 五期：run() 会注册 page.on("dialog", ...)，假对象需匹配真实 Page 契约
+
     def close(self):
         pass
 

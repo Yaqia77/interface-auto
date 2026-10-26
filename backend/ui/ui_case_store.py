@@ -22,20 +22,44 @@ VALID_BROWSERS = {"chromium", "firefox", "webkit"}
 # 失败重试上限（三期-B）：最多 3 次额外尝试；默认 0=不重试，保证存量行为不变。
 MAX_RETRY = 3
 
-# 步骤动作元数据：desc 中文名；locator/value 标记该动作是否需要定位器/取值。
+# 步骤动作元数据：desc 中文名；locator/value 标记该动作是否需要定位器/取值；
+# hint（可选）为该动作定位器/取值的填写说明，随 meta() 下发供步骤编辑器做输入占位提示
+# （单一口径：新增动作只在此定义，校验/执行/前端下拉三处自动跟随）。
 ACTIONS: dict[str, dict] = {
-    "goto":           {"desc": "打开地址", "locator": False, "value": True},
+    "goto":           {"desc": "打开地址", "locator": False, "value": True, "hint": "相对路径（自动拼环境 base_url）或完整 URL"},
     "click":          {"desc": "点击",     "locator": True,  "value": False},
     "fill":           {"desc": "输入文本", "locator": True,  "value": True},
-    "press":          {"desc": "按键",     "locator": True,  "value": True},
-    "select":         {"desc": "下拉选择", "locator": True,  "value": True},
+    "press":          {"desc": "按键",     "locator": True,  "value": True, "hint": "按键名，如 Enter / Tab / Control+a"},
+    "select":         {"desc": "下拉选择", "locator": True,  "value": True, "hint": "按选项可见文本（label）选择"},
     "check":          {"desc": "勾选",     "locator": True,  "value": False},
+    "uncheck":        {"desc": "取消勾选", "locator": True,  "value": False},
+    "dblclick":       {"desc": "双击",     "locator": True,  "value": False},
+    "upload":         {"desc": "上传文件", "locator": True,  "value": True, "hint": "本机文件路径（相对项目根或绝对路径），定位器指向 input[type=file]"},
     "hover":          {"desc": "悬停",     "locator": True,  "value": False},
     "wait_for":       {"desc": "等待出现", "locator": True,  "value": False},
     "screenshot":     {"desc": "截图",     "locator": False, "value": False},  # 可选定位器：无则整页
+    # ---- 五期 P1：交互与等待补齐 ----
+    "right_click":    {"desc": "右键点击", "locator": True,  "value": False},
+    "scroll_to":      {"desc": "滚动到元素", "locator": True, "value": False},
+    "drag_to":        {"desc": "拖拽到目标", "locator": True,  "value": True, "hint": "定位器=源元素，取值=目标元素定位器（如 #drop-zone）"},
+    "navigate":       {"desc": "前进/后退/刷新", "locator": False, "value": True, "hint": "back / forward / reload"},
+    "wait_load":      {"desc": "等待加载状态", "locator": False, "value": True, "hint": "load / domcontentloaded / networkidle"},
+    "wait_state":     {"desc": "等待元素状态", "locator": True,  "value": True, "hint": "visible / hidden / attached / detached"},
+    "sleep":          {"desc": "固定等待(毫秒)", "locator": False, "value": True, "hint": "毫秒数，如 1000（兜底硬等待，优先用显式等待）"},
+    # ---- 五期 P2：断言补齐 ----
     "expect_visible": {"desc": "断言可见", "locator": True,  "value": False},
+    "expect_hidden":  {"desc": "断言不可见", "locator": True,  "value": False, "hint": "元素不可见或不存在均判通过"},
     "expect_text":    {"desc": "断言文本", "locator": True,  "value": True},
+    "expect_count":   {"desc": "断言元素数量", "locator": True,  "value": True, "hint": "期望数量（整数）"},
+    "expect_value":   {"desc": "断言输入值", "locator": True,  "value": True, "hint": "输入框 value 期望等于"},
+    "expect_attr":    {"desc": "断言属性", "locator": True,  "value": True, "hint": "格式 属性名=期望值，如 href=/login"},
+    "expect_enabled": {"desc": "断言可交互", "locator": True,  "value": False},
     "expect_url":     {"desc": "断言地址", "locator": False, "value": True},
+    "expect_title":   {"desc": "断言标题", "locator": False, "value": True, "hint": "页面 title 需包含的文本"},
+    # ---- 五期 P4：iframe / 多标签窗口 ----
+    "switch_frame":   {"desc": "切入 iframe", "locator": True,  "value": False, "hint": "iframe 元素定位器（如 css=#app-frame）"},
+    "switch_main":    {"desc": "回到主文档", "locator": False, "value": False},
+    "switch_window":  {"desc": "切换标签页", "locator": False, "value": True, "hint": "页签序号（0 起）或 last（最新打开的窗口）"},
 }
 VALID_ACTIONS = set(ACTIONS)
 
@@ -49,6 +73,25 @@ ACTION_ALIASES: dict[str, str] = {
     "press": "press", "按键": "press", "回车": "press", "按下": "press",
     "select": "select", "选择": "select", "下拉": "select", "下拉选择": "select",
     "check": "check", "勾选": "check", "选中": "check",
+    "uncheck": "uncheck", "取消勾选": "uncheck", "取消选中": "uncheck",
+    "dblclick": "dblclick", "双击": "dblclick",
+    "right_click": "right_click", "右键": "right_click", "右键点击": "right_click",
+    "upload": "upload", "上传": "upload", "上传文件": "upload", "选择文件": "upload",
+    "scroll_to": "scroll_to", "滚动": "scroll_to", "滚动到": "scroll_to", "滚动到元素": "scroll_to",
+    "drag_to": "drag_to", "拖拽": "drag_to", "拖动": "drag_to", "拖到": "drag_to",
+    "navigate": "navigate", "前进": "navigate", "后退": "navigate", "刷新": "navigate", "导航": "navigate",
+    "wait_load": "wait_load", "等待加载": "wait_load", "页面加载": "wait_load",
+    "wait_state": "wait_state", "等待状态": "wait_state", "等待消失": "wait_state",
+    "sleep": "sleep", "硬等待": "sleep", "固定等待": "sleep", "停顿": "sleep",
+    "expect_hidden": "expect_hidden", "断言不可见": "expect_hidden", "不可见": "expect_hidden",
+    "expect_count": "expect_count", "断言数量": "expect_count", "数量断言": "expect_count",
+    "expect_value": "expect_value", "断言输入值": "expect_value", "值断言": "expect_value",
+    "expect_attr": "expect_attr", "断言属性": "expect_attr", "属性断言": "expect_attr",
+    "expect_enabled": "expect_enabled", "断言可交互": "expect_enabled", "可用": "expect_enabled",
+    "expect_title": "expect_title", "断言标题": "expect_title", "标题断言": "expect_title",
+    "switch_frame": "switch_frame", "切帧": "switch_frame", "切入iframe": "switch_frame", "切换iframe": "switch_frame",
+    "switch_main": "switch_main", "回主文档": "switch_main", "切回主文档": "switch_main",
+    "switch_window": "switch_window", "切换窗口": "switch_window", "切换标签": "switch_window", "切标签页": "switch_window",
     "hover": "hover", "悬停": "hover", "移动": "hover",
     "wait_for": "wait_for", "等待": "wait_for", "等待出现": "wait_for",
     "screenshot": "screenshot", "截图": "screenshot",
@@ -81,11 +124,13 @@ def normalize_bool(raw: object, default: bool = True) -> bool:
         return False
     return default
 
-# 定位器前缀（与 core.ui_runner 解析口径一致）；裸选择器默认按 css 处理。
-_LOCATOR_PREFIXES = ("css=", "xpath=", "text=", "role=")
+# 定位器前缀（与 core.engines.web.engine._resolve_locator 解析口径一致）；裸选择器默认按 css 处理。
+# 五期 P3 新增 testid=/placeholder=/alt= 稳定标识方言（对应 get_by_test_id/placeholder/alt_text）。
+_LOCATOR_PREFIXES = ("css=", "xpath=", "text=", "role=", "testid=", "placeholder=", "alt=")
 
 # 高频动作（新手优先展示）：其余归入「高级」；供 meta() 给步骤编辑器分组下拉。
-COMMON_ACTIONS = {"goto", "click", "fill", "expect_text", "expect_visible", "wait_for"}
+COMMON_ACTIONS = {"goto", "click", "fill", "check", "uncheck", "dblclick", "upload",
+                  "expect_text", "expect_visible", "expect_hidden", "wait_for"}
 
 _CASE_ID_RE = re.compile(r"[\r\n\t]")
 
@@ -295,6 +340,7 @@ def meta(path: Path) -> dict:
         "modules": sorted({str(c.get("module", "")) for c in cases if c.get("module")}),
         "actions": [{"action": a, "desc": m["desc"],
                      "need_locator": m["locator"], "need_value": m["value"],
+                     "hint": m.get("hint", ""),
                      "group": "常用" if a in COMMON_ACTIONS else "高级"}
                     for a, m in sorted(ACTIONS.items())],
     }
