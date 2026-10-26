@@ -367,6 +367,13 @@ export const api = {
     return `/api/runs/${encodeURIComponent(runId)}/attachment/${encodeURIComponent(filename)}${q}`;
   },
 
+  /** 六期失败 trace zip 下载直链（同截图取图口径，token 走 ?token= 兜底；下本地后 npx playwright show-trace 回放） */
+  reportTraceUrl: (runId: string, filename: string) => {
+    const token = getToken();
+    const q = token ? `?token=${encodeURIComponent(token)}` : "";
+    return `/api/runs/${encodeURIComponent(runId)}/trace/${encodeURIComponent(filename)}${q}`;
+  },
+
   /* ---------- 凭证管理（值全程掩码，不回显明文） ---------- */
   listSecrets: () => http.get<SecretsResp>("/secrets").then((r) => r.data),
 

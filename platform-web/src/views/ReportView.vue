@@ -708,6 +708,14 @@ watch(runId, () => load());
                 第 {{ h.attempt }} 次失败：{{ h.error || "步骤未通过" }}
               </div>
             </el-alert>
+            <!-- 六期失败 trace：用例最终失败留存现场，下载后本地 show-trace 回放（未开启/通过不出现此块） -->
+            <el-alert v-if="detail.trace_file" :closable="false" type="info" style="margin-bottom: 8px">
+              <div style="font-size: 12px; line-height: 1.7">
+                失败现场已留存 Playwright trace：
+                <el-link type="primary" :href="api.reportTraceUrl(runId, detail.trace_file)" target="_blank" style="font-size: 12px; vertical-align: baseline">下载 trace.zip</el-link>
+                ，本地执行 <span class="mono">npx playwright show-trace &lt;文件&gt;</span> 可回放 DOM / 网络 / console 逐步定位。
+              </div>
+            </el-alert>
             <div class="dim" style="margin-bottom: 8px">按序执行，任一步失败即中断并截全屏；点截图可放大查看。</div>
             <el-table :data="detail.ui_steps" size="small">
               <el-table-column label="#" width="44">

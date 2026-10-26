@@ -457,6 +457,23 @@ def get_attachment(run_id: str, filename: str):
     return FileResponse(p, media_type=media)
 
 
+@router.get("/{run_id}/trace/{filename}", summary="失败 trace 附件下载（zip，供本地 npx playwright show-trace 回放）")
+def get_trace(run_id: str, filename: str):
+    """从批次 allure-results 取 trace zip（按文件名）。
+
+    六期：仅失败 UI 用例产出。限定 .zip + 纯文件名 + 限定目录，防路径穿越；与截图/报告一致走登录态。
+    """
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="非法 trace 文件名")
+    if Path(filename).suffix.lower() != ".zip":
+        raise HTTPException(status_code=400, detail="只允许 zip trace 文件")
+    results = _results_dir_or_404(run_id)
+    p = (results / filename).resolve()
+    if p.parent != results.resolve() or not p.is_file():
+        raise HTTPException(status_code=404, detail="trace 文件不存在")
+    return FileResponse(p, media_type="application/zip", filename=filename)
+
+
 # ==================== 报告删除 / 保留策略（需 report:delete 权限） ====================
 
 

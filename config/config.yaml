@@ -38,6 +38,7 @@ ui:
   retry_default: 0  # 失败重试次数默认值（0–3，0=不重试；采集模式永不重试）
   workers_default: 1  # 并行 worker 数默认值（四期：1=串行；>1 走 xdist loadgroup 按浏览器分组×分片并行）
   workers_max: 4      # 并行 worker 数硬上限（再受本机 CPU 核数截断）
+  trace: on_failure   # 六期观测与诊断：失败 trace 留存（off=关闭 / on_failure=用例最终失败时导出 Playwright trace.zip 落报告）
 
 # 日志
 log:

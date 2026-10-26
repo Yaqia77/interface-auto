@@ -204,6 +204,41 @@ const fmtDur = (ms: number) => (ms >= 1000 ? (ms / 1000).toFixed(2) + "s" : ms +
 const fmtRate = (r: number) => Math.round(r * 100) + "%";
 const toReport = (runId: string) => router.push({ path: "/report", query: { runId } });
 
+/* ============ Flaky 趋势（六期观测与诊断） ============ */
+interface FlakyRow {
+  case_id: string;
+  name: string;
+  runs: number;
+  flaky: number;    // 重试后通过次数
+  failed: number;   // 最终失败次数
+  retried: number;  // 发生过重试的次数
+  maxAttempts: number;
+}
+// 复用已加载的 batchCases（含六期结构化 attempts/retried/flaky），按 case_id 跨批次聚合
+const flakyRows = computed<FlakyRow[]>(() => {
+  const map = new Map<string, FlakyRow>();
+  for (const bc of batchCases.value) {
+    for (const it of bc.items) {
+      // batchCases 新→旧，首次命中即以最新 name；后续同用例只累计计数
+      const rec = map.get(it.case_id) ?? {
+        case_id: it.case_id, name: it.name, runs: 0, flaky: 0, failed: 0, retried: 0, maxAttempts: 1,
+      };
+      rec.runs++;
+      if (it.flaky) rec.flaky++;
+      if (it.retried) rec.retried++;
+      if (FAILED.has(it.status)) rec.failed++;
+      const at = it.attempts ?? 1;
+      if (at > rec.maxAttempts) rec.maxAttempts = at;
+      map.set(it.case_id, rec);
+    }
+  }
+  return [...map.values()]
+    .filter((r) => r.retried > 0 || r.failed > 0) // 只列可疑项（重试过或失败过）
+    .sort((a, b) => b.flaky - a.flaky || b.failed - a.failed || b.retried - a.retried);
+});
+const flakyCaseCount = computed(() => flakyRows.value.filter((r) => r.flaky > 0).length);
+const flakyMax = computed(() => Math.max(1, ...flakyRows.value.map((r) => r.flaky)));
+
 onMounted(load);
 </script>
 
@@ -383,6 +418,31 @@ onMounted(load);
         </section>
       </div>
     </div>
+
+    <!-- Flaky 趋势（六期观测与诊断）：靠重试蒙过的不稳定用例排行 -->
+    <section class="panel">
+      <header class="panel-head">
+        <span class="head-bar"></span>
+        <h3>Flaky 趋势</h3>
+        <span class="head-meta">近 {{ batchCases.length }} 批 · flaky 用例 {{ flakyCaseCount }} 个</span>
+        <span class="head-hint">flaky = 靠重试才通过的不稳定用例，建议排查首次失败根因</span>
+      </header>
+      <div class="panel-body">
+        <div v-if="flakyRows.length" class="flaky-list">
+          <div v-for="r in flakyRows.slice(0, 15)" :key="r.case_id" class="flaky-row">
+            <span class="flaky-name" :title="`${r.case_id} · ${r.name}`">{{ r.case_id }}</span>
+            <div class="bar-track">
+              <div class="bar-fill fill-flaky" :style="{ width: Math.max(4, (r.flaky / flakyMax) * 100) + '%' }"></div>
+            </div>
+            <span class="flaky-metric"><b class="flaky-warn">{{ r.flaky }}</b> flaky</span>
+            <span class="flaky-metric dim2">{{ r.retried }} 重试</span>
+            <span class="flaky-metric" :class="r.failed ? 'txt-fail' : 'dim2'">{{ r.failed }} 失败</span>
+            <span class="flaky-cnt">{{ r.runs }} 次</span>
+          </div>
+        </div>
+        <el-empty v-else :image-size="50" description="近期无重试/失败用例，稳定性良好" />
+      </div>
+    </section>
   </div>
 </template>
 
@@ -489,6 +549,17 @@ onMounted(load);
 /* 颜色 */
 .txt-ok { color: #2f9e44; }
 .txt-fail { color: #e03131; }
+
+/* Flaky 趋势（六期） */
+.flaky-list { display: flex; flex-direction: column; gap: 9px; }
+.flaky-row { display: flex; align-items: center; gap: 10px; }
+.flaky-name { font-family: Consolas, Monaco, monospace; font-size: 11px; color: #5b6470; width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+.flaky-metric { font-size: 12px; color: #5b6470; white-space: nowrap; }
+.flaky-metric b { font-size: 14px; font-weight: 700; }
+.flaky-warn { color: #f59f00; }
+.dim2 { color: #b6bcc7; }
+.flaky-cnt { font-size: 11px; color: #a8afba; width: 42px; text-align: right; flex-shrink: 0; }
+.fill-flaky { background: linear-gradient(90deg, #ffd43b, #f59f00); }
 
 @media (max-width: 1200px) {
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }

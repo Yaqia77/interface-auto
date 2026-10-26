@@ -54,6 +54,8 @@ class UiRunResult:
     # attempt_history=此前各次失败摘要（末次结果不重复入列），供报告展示「重试 k 次后通过」。
     attempts: int = 1
     attempt_history: list[dict] = field(default_factory=list)
+    # 六期观测与诊断：失败时导出的 Playwright trace zip 字节（仅末次失败留存，交上层回调落 allure）
+    trace_blob: Optional[bytes] = None
 
 
 class UiRunnerError(Exception):
@@ -166,7 +168,8 @@ class UiRunner:
                  session_provider: Optional[Callable[[dict], tuple]] = None,
                  session_committer: Optional[Callable[[dict, str], None]] = None,
                  browser_pool: Optional["BrowserPool"] = None,
-                 attempt: int = 1):
+                 attempt: int = 1,
+                 trace: str = "off"):
         self.ctx = ctx
         self.base_url = base_url
         self._attach = attach
@@ -184,6 +187,8 @@ class UiRunner:
         # attempt（三期-B）：第几次尝试（1 起）。仅影响截图命名（>1 时加「第N试」前缀），
         # 保证 retry=0 的存量用例截图名与二期逐字节一致。
         self.attempt = max(1, int(attempt))
+        # 六期：trace 留存模式（"off" / "on_failure"）；采集模式恒不启用
+        self._trace = (trace or "off").lower()
         # 截图名中的用例标识（run() 开头从 case 回填）：不同用例同名步骤截图不再互相覆盖
         self._case_tag = ""
         # 五期 P4「活动 target」模型：self.page=当前根标签页（页面级动作作用域），
@@ -207,6 +212,7 @@ class UiRunner:
         page = None
         context = None
         bundle = None
+        tracing_on = False
         # 采集模式永不进池（设计护栏：采集是同步短任务，崩溃不牵连批次）；无池 = 二期逐条独立启停现状。
         use_pool = self._browser_pool is not None and self.mode != "collect"
         try:
@@ -236,6 +242,8 @@ class UiRunner:
             # 五期 P4：默认放行原生 dialog（alert/confirm/beforeunload），多数流程需点“确定”；
             # 此前 Playwright 默认 dismiss 会静默取消。需 dismiss 的场景留后续显式动作。
             page.on("dialog", _accept_dialog)
+            # 六期：context 建立后按需启用 trace（假对象/旧内核失败自动降级为不录制）
+            tracing_on = self._maybe_start_tracing(context)
 
             steps = case.get("steps") or []
             for i, step in enumerate(steps, 1):
@@ -280,6 +288,15 @@ class UiRunner:
             if use_pool and bundle is not None and _looks_browser_dead(result.error):
                 self._browser_pool.invalidate(bundle)
         finally:
+            # 六期：本次失败且已录 trace，在关闭 context 前导出 zip 字节（末次失败留存交上层）；
+            # 通过则显式 stop 丢弃（避免真实浏览器「tracing 未关闭」告警，不留文件）。
+            if tracing_on and context is not None:
+                if not result.ok:
+                    blob = self._export_trace(context)
+                    if blob:
+                        result.trace_blob = blob
+                else:
+                    self._stop_tracing_discard(context)
             if use_pool:
                 # 只关 page/context，绝不关 browser/playwright —— 这正是本期折叠掉的固定开销所在。
                 # context 关闭失败也不放过 page 的回收尝试；bundle 是否报废由下次 acquire 探活决定。
@@ -299,6 +316,45 @@ class UiRunner:
                         pass
             result.duration = time.perf_counter() - start
         return result
+
+    # ---------- Trace（六期观测与诊断） ----------
+
+    def _maybe_start_tracing(self, context) -> bool:
+        """六期：trace 开启且 context 支持时启动 tracing；假对象/旧内核异常一律视作未启动（降级不影响用例）。"""
+        if self._trace != "on_failure" or self.mode == "collect" or context is None:
+            return False
+        try:
+            context.tracing.start(screenshots=True, snapshots=True, sources=False)
+            return True
+        except Exception as e:  # noqa: BLE001 无 trace 能力：本次不记录，不阻断执行
+            logger.warning("[trace] 启动 tracing 失败，跳过本次 trace 留存: {}", e)
+            return False
+
+    def _export_trace(self, context) -> Optional[bytes]:
+        """六期：停止 tracing 并读回 trace zip；任何异常返回 None（trace 是锦上添花，绝不左右判定）。"""
+        tmp = None
+        try:
+            base = self.output_dir if self.output_dir is not None else Path(tempfile.gettempdir())
+            base.mkdir(parents=True, exist_ok=True)
+            tmp = base / f".trace-{self._case_tag or 'case'}-{int(time.time() * 1000)}.zip"
+            context.tracing.stop(path=str(tmp))
+            return tmp.read_bytes()
+        except Exception as e:  # noqa: BLE001 trace 导出失败不影响用例成败
+            logger.warning("[trace] 导出失败（忽略）: {}", e)
+            return None
+        finally:
+            if tmp is not None:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    def _stop_tracing_discard(self, context) -> None:
+        """六期：用例通过时显式停止 tracing 但不导出文件（不留垃圾，不触发未关闭告警）。"""
+        try:
+            context.tracing.stop()
+        except Exception as e:  # noqa: BLE001 丢弃失败无关紧要
+            logger.debug("[trace] 通过用例停止 tracing 忽略: {}", e)
 
     # ---------- 登录态（storage_state）解析与采集 ----------
 
@@ -670,6 +726,8 @@ class WebEngine(Engine):
                 session_committer: Optional[Callable[[dict, str], None]] = None,
                 browser_pool: Optional["BrowserPool"] = None,
                 retry: Optional[int] = None,
+                trace: str = "off",
+                attach_trace: Optional[Callable[[str, bytes], None]] = None,
                 output_dir: Optional[Path] = DEFAULT_OUTPUT_DIR, **deps) -> UiRunResult:
         """执行一条 UI 用例 → UiRunResult。
 
@@ -686,7 +744,7 @@ class WebEngine(Engine):
             result = UiRunner(ctx, base_url, attach=attach, step=step, output_dir=output_dir,
                               mode=mode, session_provider=session_provider,
                               session_committer=session_committer,
-                              browser_pool=browser_pool, attempt=attempt).run(case)
+                              browser_pool=browser_pool, attempt=attempt, trace=trace).run(case)
             if result.ok or attempt == effective + 1:
                 break
             history.append({"attempt": attempt, "ok": False,
@@ -698,6 +756,12 @@ class WebEngine(Engine):
         result.attempt_history = history
         if result.attempts > 1 and not result.ok:
             result.error = f"重试 {result.attempts - 1} 次后仍失败：{result.error}"
+        # 六期：用例最终失败才落 trace 附件（trace_blob 仅在该次 run 失败时留），中间失败末次通过不留
+        if not result.ok and result.trace_blob and attach_trace is not None:
+            try:
+                attach_trace("UI失败trace", result.trace_blob)
+            except Exception as e:  # noqa: BLE001 trace 附件落盘失败不改用例成败
+                logger.warning("[trace] 失败 trace 落附件失败（忽略）: {}", e)
         return result
 
     @staticmethod

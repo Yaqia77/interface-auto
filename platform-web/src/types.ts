@@ -314,6 +314,10 @@ export interface RunCaseSummary {
   summary: string;
   assert_total: number | null;
   assert_failed: number | null;
+  /** 六期 flaky 观测：实际尝试次数（缺省 1=未重试）；retried=发生过重试；flaky=重试后通过（不稳定） */
+  attempts?: number;
+  retried?: boolean;
+  flaky?: boolean;
 }
 
 /** 单条断言执行结果（报告详情“断言结果”Tab） */
@@ -349,6 +353,8 @@ export interface RunCaseDetail {
   ui_steps: UiStepTrace[] | null;
   /** UI 重试轨迹（三期-B）；未发生重试/非 UI 用例为 null */
   ui_retry?: UiRetryTrace | null;
+  /** 六期失败 trace zip 在批次 allure-results 中的源文件名（报告页下载 show-trace 用）；非 UI/无 trace 为 null */
+  trace_file?: string | null;
 }
 
 /** UI 重试单次失败摘要（后端已掩码） */

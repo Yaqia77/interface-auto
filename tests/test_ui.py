@@ -37,6 +37,12 @@ def _attach_png(name, data):
         allure.attach(name=name, body=data, attachment_type=allure.attachment_type.PNG)
 
 
+def _attach_trace(name, data):
+    """六期：失败 trace zip 落 allure-results（extension=zip），供报告页下载 show-trace 回放。"""
+    if HAS_ALLURE:
+        allure.attach(body=data, name=name, extension="zip")
+
+
 def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_registry, ui_browser_pool):
     if HAS_ALLURE:
         allure.dynamic.title(f"[{ui_case.get('priority')}] {ui_case.get('case_id')} {ui_case.get('name')}")
@@ -67,6 +73,9 @@ def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_regi
     case_retry = int(ui_case.get("retry") or 0)
     batch_default = int(((app_config.get("config") or {}).get("ui") or {}).get("retry_default") or 0)
     retry = case_retry if case_retry > 0 else batch_default
+    # 六期观测与诊断：trace 留存开关取 config.ui.trace（缺省 on_failure：仅失败时导出）；
+    # 无 allure 环境不注入回调（attach_trace=None），引擎端 trace_blob 自然落空，零回归。
+    trace_mode = ((app_config.get("config") or {}).get("ui") or {}).get("trace") or "on_failure"
 
     result = get_engine("web").execute(
         ui_case, context, base_url=base_url,
@@ -75,6 +84,8 @@ def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_regi
         session_provider=lambda c: session_collect.resolve_for_attach(c, ui_session_registry),
         browser_pool=ui_browser_pool,
         retry=retry,
+        trace=trace_mode,
+        attach_trace=(_attach_trace if HAS_ALLURE else None),
     )
 
     if HAS_ALLURE:
