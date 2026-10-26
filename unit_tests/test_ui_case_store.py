@@ -264,3 +264,55 @@ def test_meta_lists_actions_and_modules(case_file):
     assert "chromium" in m["browsers"]
     assert any(a["action"] == "goto" for a in m["actions"])
     assert set(m["priorities"]) >= {"P0", "P1"}
+
+
+def test_meta_actions_have_group():
+    # 动作字典带 group 字段（步骤编辑器分组下拉驱动）：常用/高级
+    m = store.meta(Path("__nonexistent__.json"))
+    by_action = {a["action"]: a for a in m["actions"]}
+    assert by_action["goto"]["group"] == "常用"
+    assert by_action["click"]["group"] == "常用"
+    assert by_action["hover"]["group"] == "高级"
+    assert {a["group"] for a in m["actions"]} <= {"常用", "高级"}
+
+
+# ==================== 中文动作别名归一 ====================
+
+@pytest.mark.parametrize("raw,expect", [
+    ("打开", "goto"), ("访问", "goto"), ("goto", "goto"), ("GOTO", "goto"),
+    ("点击", "click"), ("输入", "fill"), ("填写", "fill"),
+    ("断言文本", "expect_text"), ("包含文本", "expect_text"),
+    ("断言可见", "expect_visible"), ("等待出现", "wait_for"),
+    (" 点击 ", "click"), ("", ""),
+])
+def test_normalize_action(raw, expect):
+    assert store.normalize_action(raw) == expect
+
+
+def test_normalize_action_unknown():
+    # 无法识别：去空白小写后原样返回（交由 validate 报非法）
+    assert store.normalize_action("飞翔") == "飞翔"
+    assert store.normalize_action("FLY") == "fly"
+
+
+def test_validate_accepts_chinese_action():
+    # 中文动作经归一后能过校验，落库为规范英文键
+    c = store.validate_case(_case(steps=[
+        {"action": "打开", "value": "/login"},
+        {"action": "输入", "locator": "#u", "value": "qa"},
+        {"action": "断言文本", "locator": ".w", "value": "欢迎"},
+    ]))
+    assert [s["action"] for s in c["steps"]] == ["goto", "fill", "expect_text"]
+
+
+@pytest.mark.parametrize("raw,expect", [
+    ("是", True), ("Y", True), ("1", True), ("true", True), (True, True),
+    ("否", False), ("N", False), ("0", False), ("跳过", False), (False, False),
+])
+def test_normalize_bool(raw, expect):
+    assert store.normalize_bool(raw, True) is expect
+
+
+def test_normalize_bool_default():
+    assert store.normalize_bool("乱填", default=True) is True
+    assert store.normalize_bool("乱填", default=False) is False

@@ -5,7 +5,7 @@
  * 是否需要定位器/取值由动作字典 need_locator/need_value 驱动，与后端校验同源；
  * 本组件只做编辑与结构化，最终合法性仍由后端落盘那一刻校验兜底。
  */
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import type { UiActionMeta, UiStep } from "../types";
 
@@ -92,18 +92,85 @@ function insertVar(name: string) {
 
 // 变量 chip 展示文本：在脚本里拼接，避免模板 {{ }} 字面量干扰解析
 const varChip = (v: string) => "{{" + v + "}}";
+
+// 动作下拉按使用频率分组（常用置顶、高级次级），与后端 meta.actions.group 同源
+const groupedActions = computed(() => {
+  const common = props.actions.filter((a) => a.group === "常用");
+  const advanced = props.actions.filter((a) => a.group !== "常用");
+  return [
+    { label: "常用", items: common },
+    { label: "高级", items: advanced },
+  ].filter((g) => g.items.length);
+});
+
+// 快捷步骤组合：一键生成骨架，新手只改取值/定位器
+interface QuickCombo { key: string; label: string; steps: UiStep[] }
+const QUICK_COMBOS: QuickCombo[] = [
+  { key: "login", label: "登录流程", steps: [
+    { action: "goto", value: "/login", desc: "打开登录页" },
+    { action: "fill", locator: "#username", value: "{{username}}" },
+    { action: "fill", locator: "#password", value: "{{password}}" },
+    { action: "click", locator: "#submit" },
+    { action: "expect_text", locator: ".welcome", value: "欢迎", desc: "校验登录成功" },
+  ] },
+  { key: "search", label: "搜索流程", steps: [
+    { action: "goto", value: "/", desc: "打开首页" },
+    { action: "fill", locator: "input[name=q]", value: "{{keyword}}" },
+    { action: "click", locator: "button[type=submit]" },
+    { action: "wait_for", locator: ".result", desc: "等待结果" },
+    { action: "expect_visible", locator: ".result" },
+  ] },
+  { key: "open_assert", label: "打开+断言", steps: [
+    { action: "goto", value: "/", desc: "打开页面" },
+    { action: "expect_visible", locator: "#title" },
+  ] },
+];
+function insertCombo(c: QuickCombo) {
+  rows.push(...c.steps.map((s) => toRow(s)));
+}
+
+// 定位器实时提示：根据输入形态提示将按哪种引擎解析
+function locatorHint(loc: string): { text: string; type: string } {
+  const l = (loc || "").trim();
+  if (!l) return { text: "裸写默认按 CSS 解析（如 #id / .class）", type: "info" };
+  if (l.startsWith("css=")) return { text: "按 CSS 选择器解析", type: "success" };
+  if (l.startsWith("xpath=")) return { text: "按 XPath 解析", type: "success" };
+  if (l.startsWith("text=")) return { text: "按可见文本匹配", type: "success" };
+  if (l.startsWith("role=")) return { text: "按 ARIA 角色+名称定位（get_by_role）", type: "success" };
+  if (l.startsWith("//") || l.startsWith("(")) return { text: "看起来是 XPath，建议加 xpath= 前缀", type: "warning" };
+  return { text: "将按 CSS 选择器解析", type: "info" };
+}
 </script>
 
 <template>
   <div class="ui-step-editor">
+    <!-- 顶部工具栏：快捷组合 + 新手三步引导（空态时） -->
+    <div class="toolbar">
+      <el-dropdown trigger="click" @command="(k: string) => { const c = QUICK_COMBOS.find(x => x.key === k); if (c) insertCombo(c); }">
+        <el-button size="small" type="primary" plain>⚡ 插入常用组合<el-icon class="el-icon--right"><span>▾</span></el-icon></el-button>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item v-for="c in QUICK_COMBOS" :key="c.key" :command="c.key">{{ c.label }}（{{ c.steps.length }} 步）</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <span class="hint" style="margin:0">新手？先点上方下拉选一个模板骨架，再逐步改定位器与取值。</span>
+    </div>
+
+    <el-alert v-if="!rows.length" type="info" :closable="false" show-icon class="guide">
+      <template #title>三步快速上手：① 打开页面（goto 填相对路径）→ ② 操作元素（点击/输入，填定位器）→ ③ 断言结果（断言文本/可见）。可点上方「插入常用组合」一键生成骨架。</template>
+    </el-alert>
+
     <div v-for="(r, i) in rows" :key="i" class="step-card">
       <div class="step-head">
         <span class="step-no">{{ i + 1 }}</span>
-        <el-select v-model="r.action" placeholder="选择动作" style="width: 180px" size="default">
-          <el-option v-for="a in actions" :key="a.action" :value="a.action" :label="`${a.desc}（${a.action}）`">
-            <span class="opt-key">{{ a.desc }}</span>
-            <span class="opt-val mono">{{ a.action }}</span>
-          </el-option>
+        <el-select v-model="r.action" placeholder="选择动作" style="width: 200px" size="default">
+          <el-option-group v-for="g in groupedActions" :key="g.label" :label="g.label">
+            <el-option v-for="a in g.items" :key="a.action" :value="a.action" :label="`${a.desc}（${a.action}）`">
+              <span class="opt-key">{{ a.desc }}</span>
+              <span class="opt-val mono">{{ a.action }}</span>
+            </el-option>
+          </el-option-group>
         </el-select>
         <span v-if="isExpect(r.action)" class="expect-tag">断言：期望值不满足即该步失败并中断</span>
         <div class="step-ops">
@@ -114,15 +181,12 @@ const varChip = (v: string) => "{{" + v + "}}";
       </div>
 
       <div class="step-body">
-        <el-input
-          v-if="needLocator(r.action) || r.locator"
-          v-model="r.locator"
-          :placeholder="LOC_PH"
-          class="mono"
-          clearable
-        >
-          <template #prepend>定位器</template>
-        </el-input>
+        <template v-if="needLocator(r.action) || r.locator">
+          <el-input v-model="r.locator" :placeholder="LOC_PH" class="mono" clearable>
+            <template #prepend>定位器</template>
+          </el-input>
+          <div class="loc-hint" :class="'loc-' + locatorHint(r.locator).type">{{ locatorHint(r.locator).text }}</div>
+        </template>
         <el-input
           v-if="needValue(r.action) || r.value"
           v-model="r.value"
@@ -166,4 +230,10 @@ const varChip = (v: string) => "{{" + v + "}}";
 .opt-val { float: right; color: #a0a4a8; margin-left: 16px; }
 .var-chips { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .var-chip { cursor: pointer; font-family: Consolas, Monaco, monospace; }
+.toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 10px; background: #f5f7fa; border: 1px solid #e4e7ed; border-radius: 8px; }
+.guide { margin: 0; }
+.loc-hint { font-size: 12px; line-height: 18px; padding-left: 2px; }
+.loc-info { color: #909399; }
+.loc-success { color: #67c23a; }
+.loc-warning { color: #e6a23c; }
 </style>

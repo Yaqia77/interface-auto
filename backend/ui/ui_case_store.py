@@ -39,8 +39,53 @@ ACTIONS: dict[str, dict] = {
 }
 VALID_ACTIONS = set(ACTIONS)
 
+# 中文/常见别名 → 规范动作键：供 Excel 一步一行解析与 JSON 导入共用，
+# 让非技术 QA 只填「打开/点击/输入」即可，无需记 goto/click/fill。
+# 规范英文键本身也在内（幂等）。
+ACTION_ALIASES: dict[str, str] = {
+    "goto": "goto", "打开": "goto", "打开地址": "goto", "访问": "goto", "访问页面": "goto",
+    "click": "click", "点击": "click", "单击": "click",
+    "fill": "fill", "输入": "fill", "填写": "fill", "输入文本": "fill", "填表": "fill",
+    "press": "press", "按键": "press", "回车": "press", "按下": "press",
+    "select": "select", "选择": "select", "下拉": "select", "下拉选择": "select",
+    "check": "check", "勾选": "check", "选中": "check",
+    "hover": "hover", "悬停": "hover", "移动": "hover",
+    "wait_for": "wait_for", "等待": "wait_for", "等待出现": "wait_for",
+    "screenshot": "screenshot", "截图": "screenshot",
+    "expect_visible": "expect_visible", "断言可见": "expect_visible", "可见": "expect_visible",
+    "expect_text": "expect_text", "断言文本": "expect_text", "包含文本": "expect_text", "断言包含": "expect_text",
+    "expect_url": "expect_url", "断言地址": "expect_url", "断言url": "expect_url", "url断言": "expect_url",
+}
+
+# 布尔别名（无头/是否执行列）：中文是/否、Y/N、1/0 一律接受
+BOOL_TRUE = {"true", "1", "y", "yes", "是", "启用", "执行", "t"}
+BOOL_FALSE = {"false", "0", "n", "no", "否", "停用", "不执行", "跳过", "f"}
+
+
+def normalize_action(raw: object) -> str:
+    """把录入的动作文本（中文别名/英文键/大小写）归一为规范动作键；无法识别时原样返回（去空白小写后）。"""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    return ACTION_ALIASES.get(text) or ACTION_ALIASES.get(text.lower()) or text.lower()
+
+
+def normalize_bool(raw: object, default: bool = True) -> bool:
+    """把无头/是否执行的文本归一为布尔；无法识别返回 default。"""
+    if isinstance(raw, bool):
+        return raw
+    text = str(raw if raw is not None else "").strip().lower()
+    if text in BOOL_TRUE:
+        return True
+    if text in BOOL_FALSE:
+        return False
+    return default
+
 # 定位器前缀（与 core.ui_runner 解析口径一致）；裸选择器默认按 css 处理。
 _LOCATOR_PREFIXES = ("css=", "xpath=", "text=", "role=")
+
+# 高频动作（新手优先展示）：其余归入「高级」；供 meta() 给步骤编辑器分组下拉。
+COMMON_ACTIONS = {"goto", "click", "fill", "expect_text", "expect_visible", "wait_for"}
 
 _CASE_ID_RE = re.compile(r"[\r\n\t]")
 
@@ -123,6 +168,7 @@ def _validate_step(step: object, idx: int) -> dict:
     if not isinstance(step, dict):
         raise UiCaseError("invalid", f"第 {idx} 步必须是对象")
     action = str(step.get("action") or "").strip()
+    action = normalize_action(action)  # 中文别名/英文键统一归一，再校验合法性
     if action not in VALID_ACTIONS:
         raise UiCaseError("invalid", f"第 {idx} 步动作非法: {action!r}（可选: {'/'.join(sorted(VALID_ACTIONS))}）")
     meta = ACTIONS[action]
@@ -248,7 +294,8 @@ def meta(path: Path) -> dict:
         "browsers": sorted(VALID_BROWSERS),
         "modules": sorted({str(c.get("module", "")) for c in cases if c.get("module")}),
         "actions": [{"action": a, "desc": m["desc"],
-                     "need_locator": m["locator"], "need_value": m["value"]}
+                     "need_locator": m["locator"], "need_value": m["value"],
+                     "group": "常用" if a in COMMON_ACTIONS else "高级"}
                     for a, m in sorted(ACTIONS.items())],
     }
 

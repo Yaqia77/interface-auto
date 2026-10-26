@@ -1,7 +1,7 @@
 /** Axios 封装 + 接口函数（开发期经 Vite 代理 /api → FastAPI:8000）。 */
 import axios from "axios";
 import { ElMessage } from "element-plus";
-import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, UiSession, UiSessionStatus, UiSessionCollectResult, UiSessionMeta, AppCaseItem, AppCasePage, AppCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project } from "../types";
+import type { CaseItem, CasePage, CaseMeta, UiCaseItem, UiCasePage, UiCaseMeta, UiSession, UiSessionStatus, UiSessionCollectResult, UiSessionMeta, AppCaseItem, AppCasePage, AppCaseMeta, CaseHistoryResp, EnvsResp, EnvsUpdate, RunCasesResp, RunCaseDetail, RunItem, SecretsResp, PlanItem, PlanCreateReq, PlanUpdateReq, WebhookItem, WebhookCreateReq, WebhookUpdateReq, ScheduleItem, ScheduleCreateReq, ScheduleUpdateReq, LoginResp, UserInfo, UserCreateReq, UserUpdateReq, AuditItem, AuditLogsResp, PermMatrixResp, PermSaveResp, ScriptItem, ScriptCreateReq, ScriptUpdateReq, ScriptMeta, ApiDefItem, ApiDefCreateReq, ApiDefUpdateReq, ApiDefMeta, AggregateResult, OpenApiImportResult, SkeletonReq, SkeletonResult, ImportPreviewResp, ImportCaseDraft, Project, UiImportPreviewResp } from "../types";
 import { clearToken, getToken } from "../utils/session";
 
 const http = axios.create({ baseURL: "/api", timeout: 30000 });
@@ -183,9 +183,18 @@ export const api = {
     http.get<{ excel_variables: string[]; secret_variables: string[] }>(
       "/ui-cases/variables", { params: { file } }).then((r) => r.data),
 
-  /** UI 用例批量导入模板（JSON blob，浏览器侧下载） */
-  downloadUiCaseTemplate: () =>
-    http.get<Blob>("/ui-cases/template", { responseType: "blob" }).then((r) => r.data as Blob),
+  /** UI 用例批量导入模板（JSON blob，浏览器侧下载）；fmt=excel 下载 .xlsx 一步一行模板 */
+  downloadUiCaseTemplate: (fmt: "json" | "excel" = "json") =>
+    http.get<Blob>("/ui-cases/template", { params: { format: fmt }, responseType: "blob" }).then((r) => r.data as Blob),
+
+  /** 上传 UI 步骤 Excel 解析预览（不落盘）：返回逐条 case/marks/importable */
+  previewUiExcel: (file: File, project: string) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return http
+      .post<UiImportPreviewResp>("/ui-cases/preview", fd, { params: { project } })
+      .then((r) => r.data);
+  },
 
   /** 批量导入 UI 用例：逐条校验，编号重复跳过，非法逐条报因 */
   importUiCases: (cases: Record<string, unknown>[], file: string) =>

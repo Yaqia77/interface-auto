@@ -9,7 +9,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiStep, UiSession } from "../types";
+import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiImportPreviewResp, UiStep, UiSession } from "../types";
 import UiStepEditor from "../components/UiStepEditor.vue";
 
 const props = defineProps<{
@@ -148,32 +148,54 @@ async function doMove() {
   emit("projects-changed");
 }
 
-/* ================= 批量导入（模板下载 + JSON 文件/粘贴） ================= */
+/* ================= 批量导入（Excel 一步一行 / JSON 双通道） ================= */
 const importVisible = ref(false);
-const importRaw = ref("");
+const importMode = ref<"excel" | "json">("excel");
 const importSaving = ref(false);
 const importResult = ref<{ imported: number; imported_ids: string[]; skipped: string[]; errors: string[] } | null>(null);
 
-function openImport() {
+// JSON 通道
+const importRaw = ref("");
+// Excel 通道
+const excelPreview = ref<UiImportPreviewResp | null>(null);
+const excelParsing = ref(false);
+
+function resetImport() {
   importRaw.value = "";
+  excelPreview.value = null;
   importResult.value = null;
   importSaving.value = false;
+  excelParsing.value = false;
+}
+
+function openImport() {
+  resetImport();
+  importMode.value = "excel";
   importVisible.value = true;
 }
 
-async function downloadTemplate() {
+function switchMode(m: "excel" | "json") {
+  if (importMode.value === m) return;
+  importMode.value = m;
+  importResult.value = null;
+}
+
+async function downloadTemplate(fmt: "json" | "excel") {
   try {
-    const blob = await api.downloadUiCaseTemplate();
-    const url = URL.createObjectURL(new Blob([blob], { type: "application/json" }));
+    const blob = await api.downloadUiCaseTemplate(fmt);
+    const isExcel = fmt === "excel";
+    const url = URL.createObjectURL(new Blob([blob], {
+      type: isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json",
+    }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = "ui_cases_template.json";
+    a.download = isExcel ? "ui_cases_template.xlsx" : "ui_cases_template.json";
     a.click();
     URL.revokeObjectURL(url);
   } catch { /* 拦截器已提示 */ }
 }
 
-// 解析粘贴/上传的 JSON：兼容 {cases:[…]} 模板形态与裸数组 […]，结果供预览与导入共用
+// 解析粘贴/上传的 JSON：兼容 {cases:[…]} 模板形态与裸数组 […]
 const importParsed = computed<{ ok: boolean; cases: Record<string, unknown>[]; err: string }>(() => {
   const text = importRaw.value.trim();
   if (!text) return { ok: false, cases: [], err: "" };
@@ -187,13 +209,51 @@ const importParsed = computed<{ ok: boolean; cases: Record<string, unknown>[]; e
   }
 });
 
-function onFileChange(uploadFile: any) {
+// 文件选择：按后缀分流——.xlsx/.xlsm 走 Excel 预览，.json 走 JSON 粘贴框
+async function onFileChange(uploadFile: any) {
   const rawFile: File | undefined = uploadFile?.raw;
   if (!rawFile) return;
-  rawFile.text().then((t) => { importRaw.value = t; }).catch(() => ElMessage.error("读取文件失败"));
+  const lower = rawFile.name.toLowerCase();
+  if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm")) {
+    importMode.value = "excel";
+    importResult.value = null;
+    excelParsing.value = true;
+    excelPreview.value = null;
+    try {
+      excelPreview.value = await api.previewUiExcel(rawFile, props.file);
+    } catch { /* 拦截器已提示 */ } finally {
+      excelParsing.value = false;
+    }
+  } else if (lower.endsWith(".json")) {
+    importMode.value = "json";
+    rawFile.text().then((t) => { importRaw.value = t; }).catch(() => ElMessage.error("读取文件失败"));
+  } else {
+    ElMessage.warning("只支持 .xlsx 或 .json 文件");
+  }
 }
 
+const excelImportable = computed(() =>
+  (excelPreview.value?.items ?? []).filter((i) => i.importable && !i.exists)
+);
+
 async function doImport() {
+  if (importMode.value === "excel") {
+    const cases = excelImportable.value.map((i) => i.case as Record<string, unknown>);
+    if (!cases.length) { ElMessage.error("没有可导入的用例（请检查预览中的标红项）"); return; }
+    importSaving.value = true;
+    try {
+      const resp = await api.importUiCases(cases, props.file);
+      importResult.value = resp;
+      if (resp.imported) {
+        await search(); await loadMeta(); emit("projects-changed");
+        excelPreview.value = null;  // 导入后清空预览，避免重复提交
+      }
+    } catch { /* 拦截器已提示 */ } finally {
+      importSaving.value = false;
+    }
+    return;
+  }
+  // JSON 通道
   const parsed = importParsed.value;
   if (!parsed.ok) { ElMessage.error(parsed.err || "请先粘贴或上传 JSON"); return; }
   if (!parsed.cases.length) { ElMessage.error("cases 为空数组，没有可导入的用例"); return; }
@@ -205,6 +265,10 @@ async function doImport() {
   } catch { /* 拦截器已提示 */ } finally {
     importSaving.value = false;
   }
+}
+
+function markLevel(m: { level: string }): "info" | "warning" | "danger" {
+  return m.level === "error" ? "danger" : m.level === "warn" ? "warning" : "info";
 }
 
 /* ================= 编辑抽屉 ================= */
@@ -551,26 +615,74 @@ watch(
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹窗：下载模板 → 编辑 JSON → 上传/粘贴 → 预览校验 → 逐条落盘 -->
-    <el-dialog v-model="importVisible" title="批量导入 UI 用例" width="640px">
+    <!-- 批量导入弹窗：Excel 一步一行（新手首选）/ JSON 双通道 -->
+    <el-dialog v-model="importVisible" title="批量导入 UI 用例" width="780px">
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
+        <el-radio-group v-model="importMode" size="small" @change="(v: any) => switchMode(v)">
+          <el-radio-button value="excel">Excel 表格（推荐）</el-radio-button>
+          <el-radio-button value="json">JSON</el-radio-button>
+        </el-radio-group>
+        <el-button size="small" text type="primary" @click="downloadTemplate('excel')">⬇ 下载 Excel 模板</el-button>
+        <el-button size="small" text type="primary" @click="downloadTemplate('json')">⬇ 下载 JSON 模板</el-button>
+        <el-upload :auto-upload="false" :show-file-list="false" accept=".xlsx,.xlsm,.json,application/json" :on-change="onFileChange" style="margin-left:auto">
+          <el-button size="small" type="primary" plain>选择文件上传</el-button>
+        </el-upload>
+      </div>
+
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
         <template #title>
-          先<a style="margin: 0 4px" @click="downloadTemplate">下载 JSON 模板</a>，按模板改好后上传或粘贴；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。
+          Excel：一步一行、同编号连续行属同一用例，动作可填中文（打开/点击/输入…）；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。
         </template>
       </el-alert>
-      <div style="display: flex; gap: 12px; margin-bottom: 8px">
-        <el-upload :auto-upload="false" :show-file-list="false" accept=".json,application/json" :on-change="onFileChange">
-          <el-button size="small">选择 .json 文件</el-button>
-        </el-upload>
-        <span v-if="importRaw.trim()" style="font-size: 13px; display: flex; align-items: center; gap: 6px">
+
+      <!-- Excel 预览表 -->
+      <div v-if="importMode === 'excel'" v-loading="excelParsing">
+        <el-empty v-if="!excelPreview && !excelParsing" description="下载模板填写后，点「选择文件上传」解析预览" :image-size="60" />
+        <template v-if="excelPreview">
+          <div style="margin-bottom: 8px; font-size: 13px; color: #606266">
+            共解析 {{ excelPreview.total }} 条用例，
+            <span style="color: #67c23a">可导入 {{ excelImportable.length }} 条</span>
+            <span v-if="excelPreview.items.some((i) => i.exists)" style="color: #e6a23c">；已存在 {{ excelPreview.items.filter((i) => i.exists).length }} 条（将跳过）</span>
+            <span v-if="excelPreview.items.some((i) => !i.importable)" style="color: #f56c6c">；非法 {{ excelPreview.items.filter((i) => !i.importable).length }} 条</span>
+          </div>
+          <el-table :data="excelPreview.items" size="small" max-height="320" border>
+            <el-table-column prop="case_id" label="用例编号" width="150">
+              <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
+            </el-table-column>
+            <el-table-column prop="name" label="名称" min-width="120" show-overflow-tooltip />
+            <el-table-column prop="steps_count" label="步骤数" width="70" align="center" />
+            <el-table-column label="状态" width="90">
+              <template #default="{ row }">
+                <el-tag v-if="!row.importable" size="small" type="danger">非法</el-tag>
+                <el-tag v-else-if="row.exists" size="small" type="warning">已存在</el-tag>
+                <el-tag v-else size="small" type="success">可导入</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="标注" min-width="220">
+              <template #default="{ row }">
+                <div v-if="!row.marks.length" class="dim">—</div>
+                <div v-for="(m, mi) in row.marks" :key="mi" style="font-size: 12px">
+                  <el-tag :type="markLevel(m)" size="small">{{ m.field }}</el-tag>
+                  <span :style="{ color: m.level === 'error' ? '#f56c6c' : m.level === 'warn' ? '#e6a23c' : '#909399', marginLeft: '4px' }">{{ m.msg }}</span>
+                </div>
+              </template>
+            </el-table-column>
+          </el-table>
+        </template>
+      </div>
+
+      <!-- JSON 粘贴框 -->
+      <div v-else>
+        <span v-if="importRaw.trim()" style="font-size: 13px; display: flex; align-items: center; gap: 6px; margin-bottom: 6px">
           <template v-if="importParsed.ok">
             <el-tag size="small" type="success">可解析：{{ importParsed.cases.length }} 条</el-tag>
             <el-link type="info" :underline="false" @click="importRaw = ''">清空重填</el-link>
           </template>
           <el-tag v-else size="small" type="danger">{{ importParsed.err }}</el-tag>
         </span>
+        <el-input v-model="importRaw" type="textarea" :rows="10" class="mono" placeholder="粘贴模板 JSON（含 cases 数组），或用上方文件选择" />
       </div>
-      <el-input v-model="importRaw" type="textarea" :rows="10" class="mono" placeholder="粘贴模板 JSON（含 cases 数组），或用上方文件选择" />
+
       <div v-if="importResult" style="margin-top: 10px; font-size: 13px">
         <el-tag type="success" size="small">成功 {{ importResult.imported }} 条</el-tag>
         <el-tag v-if="importResult.skipped.length" type="warning" size="small" style="margin-left: 6px">编号重复跳过 {{ importResult.skipped.length }} 条（{{ importResult.skipped.join(", ") }}）</el-tag>
@@ -581,7 +693,10 @@ watch(
       </div>
       <template #footer>
         <el-button @click="importVisible = false">关闭</el-button>
-        <el-button type="primary" :loading="importSaving"
+        <el-button v-if="importMode === 'excel'" type="primary" :loading="importSaving"
+                   :disabled="!excelImportable.length"
+                   @click="doImport">导入 {{ excelImportable.length }} 条</el-button>
+        <el-button v-else type="primary" :loading="importSaving"
                    :disabled="!importParsed.ok || !importParsed.cases.length"
                    @click="doImport">导入 {{ importParsed.ok ? importParsed.cases.length : 0 }} 条</el-button>
       </template>

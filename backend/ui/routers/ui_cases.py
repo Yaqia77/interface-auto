@@ -6,11 +6,11 @@ file（.json）透传给本组接口；权限直接复用 case:write / case:dele
 from pathlib import Path
 
 import json
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 
 from backend.shared import authz
-from backend.ui import ui_case_store
+from backend.ui import ui_case_store, ui_excel
 from backend.ui.schemas import (UiCaseCreate, UiCaseMove, UiCaseOut, UiCasePage,
                              UiCaseUpdate, UiImportReq)
 from backend.ui.ui_case_store import UiCaseError
@@ -84,9 +84,17 @@ def list_variables(file: str = Query(..., description="UI 项目的用例 JSON �
     }
 
 
-@router.get("/template", summary="下载 UI 用例批量导入模板（JSON，内嵌字段说明与两个示例）")
-def download_template():
-    """模板与 /import 接收结构同构：cases 数组，每条字段与单条新增接口一致。"""
+@router.get("/template", summary="下载 UI 用例批量导入模板（format=json|excel）")
+def download_template(fmt: str = Query("json", alias="format", pattern="^(json|excel)$")):
+    """模板与 /import 接收结构同构：cases 数组，每条字段与单条新增接口一致。
+
+    format=excel 返回「一步一行 + 用例编号分组」的 .xlsx 模板（中文动作别名）；
+    默认 json 保持旧行为（内嵌字段说明与两个示例）。
+    """
+    if fmt == "excel":
+        return Response(content=ui_excel.build_template_bytes(),
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": 'attachment; filename="ui_cases_template.xlsx"'})
     tpl = {
         "_usage": [
             "UI 用例批量导入模板：cases 为数组，每条字段与页面「新增 UI 用例」同构。",
@@ -171,6 +179,39 @@ def import_cases(body: UiImportReq,
                 errors.append(f"{cid}: {e}")
     return {"imported": len(imported), "imported_ids": imported,
             "skipped": skipped, "errors": errors}
+
+
+@router.post("/preview", summary="上传 UI 步骤 Excel 解析预览（不落盘，确认后走 /import）")
+async def preview_excel(
+    file: UploadFile = File(..., description="UI 步骤 Excel（由 /template?format=excel 下载填写）"),
+    project: str = Query(..., description="目标 UI 项目的用例 JSON 路径（相对项目根，用于查重）"),
+    _: dict = Depends(authz.require_perm("case:write")),
+):
+    path = _resolve_file(project)
+    name = file.filename or ""
+    if not name.lower().endswith((".xlsx", ".xlsm")):
+        raise HTTPException(status_code=400, detail="只接受 .xlsx 文件（需先在弹窗下载 Excel 模板填写）")
+    payload = await file.read()
+    if len(payload) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="文件过大（限 5MB），请分批导入")
+    # 落临时文件供 openpyxl 读取（read_only），用完即删
+    import tempfile
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ui_preview_"))
+    tmp = tmp_dir / "upload.xlsx"
+    try:
+        tmp.write_bytes(payload)
+        existing = {str(c.get("case_id") or "") for c in ui_case_store.load_cases(path)}
+        try:
+            resp = ui_excel.parse_workbook(tmp, existing_ids=existing)
+        except Exception as e:  # noqa: BLE001 解析失败回 400 带原因
+            raise HTTPException(status_code=400, detail=f"Excel 解析失败：{type(e).__name__}: {e}")
+    finally:
+        try:
+            tmp.unlink(missing_ok=True)
+            tmp_dir.rmdir()
+        except OSError:
+            pass
+    return resp
 
 
 @router.get("/{case_id}", response_model=UiCaseOut, summary="UI 用例详情")

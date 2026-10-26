@@ -71,6 +71,8 @@ export interface UiActionMeta {
   desc: string;
   need_locator: boolean;
   need_value: boolean;
+  /** 下拉分组：常用（新手优先）/ 高级；缺省按高级归类 */
+  group?: string;
 }
 
 export interface UiCaseMeta {
@@ -78,6 +80,25 @@ export interface UiCaseMeta {
   browsers: string[];
   modules: string[];
   actions: UiActionMeta[];
+}
+
+/** UI Excel 一步一行上传解析预览（/api/ui-cases/preview，不落盘） */
+export interface UiImportPreviewItem {
+  row: number;
+  case_id: string;
+  name: string;
+  steps_count: number;
+  case: Record<string, unknown>;
+  marks: ImportMark[];
+  importable: boolean;
+  exists: boolean;
+}
+
+export interface UiImportPreviewResp {
+  items: UiImportPreviewItem[];
+  unmapped_headers: string[];
+  total: number;
+  error?: string;
 }
 
 /** UI 登录态会话派生状态（二期 storage_state 复用） */
