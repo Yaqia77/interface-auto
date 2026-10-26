@@ -1093,8 +1093,8 @@ onMounted(async () => {
             <el-button type="primary" @click="search">查询</el-button>
             <el-button @click="reset">重置</el-button>
             <el-button v-perm="'case:write'" type="success" plain @click="openCreate">＋ 新增用例</el-button>
-            <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
             <el-button plain @click="openBatchIo">⇪ 批量导入导出</el-button>
+            <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
           </el-form-item>
         </el-form>
       </el-card>
@@ -1435,7 +1435,6 @@ onMounted(async () => {
       :actions="IO_ACTIONS"
       :writable="ioWritable"
       :busy="smartLoading"
-      width="1040px"
       alert-text="Excel：下载模板填写后上传——智能导入先预览转换标注再勾选确认（只写入勾选行），直接导入即传即导；用例编号已存在自动跳过。"
       @update:visible="(v: boolean) => (ioVisible = v)"
       @update:mode="(v: string) => (ioMode = v as 'smart' | 'direct')"
