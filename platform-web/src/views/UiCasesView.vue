@@ -151,7 +151,7 @@ const mode = ref<"create" | "edit">("create");
 const editingId = ref("");
 const form = reactive({
   case_id: "", module: "", name: "", desc: "", priority: "P2",
-  run: true, browser: "chromium", headless: true, session: "",
+  run: true, browser: "chromium", headless: true, session: "", retry: 0,
 });
 const steps = ref<UiStep[]>([]);
 const extractRows = ref<KvRow[]>([]);
@@ -168,7 +168,7 @@ function statusLabel(s?: string) {
 function blankCase() {
   mode.value = "create";
   editingId.value = "";
-  Object.assign(form, { case_id: "", module: activeModule.value || "", name: "", desc: "", priority: "P2", run: true, browser: "chromium", headless: true, session: "" });
+  Object.assign(form, { case_id: "", module: activeModule.value || "", name: "", desc: "", priority: "P2", run: true, browser: "chromium", headless: true, session: "", retry: 0 });
   steps.value = [{ action: "goto", value: "/" }];
   extractRows.value = [];
   editVisible.value = true;
@@ -180,7 +180,7 @@ function fillFrom(c: UiCaseItem) {
   Object.assign(form, {
     case_id: c.case_id, module: c.module, name: c.name, desc: c.desc,
     priority: c.priority, run: c.run, browser: c.browser, headless: c.headless,
-    session: c.session ?? "",
+    session: c.session ?? "", retry: c.retry ?? 0,
   });
   steps.value = (c.steps ?? []).map((s) => ({ ...s }));
   extractRows.value = (c.extract ?? []).map((e) => ({ key: e.var, value: e.source }));
@@ -224,6 +224,7 @@ async function saveCase() {
     name: form.name.trim() || "新建UI用例", desc: form.desc.trim(),
     priority: form.priority, run: form.run, browser: form.browser, headless: form.headless,
     steps: steps.value, extract, session: form.session.trim() || null,
+    retry: form.retry ?? 0,
   };
   saving.value = true;
   try {
@@ -398,24 +399,32 @@ watch(
           <el-input v-model="form.desc" type="textarea" :rows="2" placeholder="验证什么场景" />
         </el-form-item>
         <el-row :gutter="8">
-          <el-col :span="8">
+          <el-col :span="6">
             <el-form-item label="浏览器">
               <el-select v-model="form.browser" style="width: 100%">
                 <el-option v-for="b in browserOptions" :key="b" :label="b" :value="b" />
               </el-select>
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="6">
             <el-form-item label="无头模式">
               <el-switch v-model="form.headless" />
             </el-form-item>
           </el-col>
-          <el-col :span="8">
+          <el-col :span="6">
             <el-form-item label="是否执行">
               <el-switch v-model="form.run" active-text="Y" inactive-text="N" />
             </el-form-item>
           </el-col>
+          <el-col :span="6">
+            <el-form-item label="失败重试">
+              <el-input-number v-model="form.retry" :min="0" :max="3" controls-position="right" style="width: 100%" />
+            </el-form-item>
+          </el-col>
         </el-row>
+        <div class="hint" style="margin: -6px 0 10px">
+          重试 0=失败即判负（默认）；&gt;0 时最多重跑对应次数，任一次通过即判通过，报告会标注「重试 k 次后通过」（登录态采集不重试）。
+        </div>
 
         <el-form-item label="引用登录态">
           <el-select v-model="form.session" clearable filterable placeholder="不引用（用例自带登录步骤）" style="width: 100%">

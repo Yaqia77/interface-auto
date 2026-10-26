@@ -104,6 +104,29 @@ def test_validate_bad_extract():
     assert e.value.kind == "invalid"
 
 
+# ==================== 失败重试字段（三期-B） ====================
+
+def test_validate_retry_absent_defaults_zero():
+    # 存量用例无 retry 键 → 规范化为 0（不重试，行为与二期一致）
+    assert store.validate_case(_case())["retry"] == 0
+
+
+@pytest.mark.parametrize("raw,expect", [
+    (2, 2), ("2", 2), (0, 0), (None, 0),
+    (-1, 0), (99, store.MAX_RETRY), ("abc", 0), (1.9, 1),
+])
+def test_validate_retry_normalizes(raw, expect):
+    # 宽归一化：合法取整、负数/非法→0、超上限截断到 MAX_RETRY
+    assert store.validate_case(_case(retry=raw))["retry"] == expect
+
+
+def test_retry_roundtrip_persisted(case_file):
+    store.create_case(case_file, _case(retry=2))
+    assert store.get_case(case_file, "ui_login_001")["retry"] == 2
+    updated = store.update_case(case_file, "ui_login_001", {"retry": 0})
+    assert updated["retry"] == 0
+
+
 # ==================== 查询 ====================
 
 def test_load_cases_missing_file_returns_empty(tmp_path):

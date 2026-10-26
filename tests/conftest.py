@@ -382,3 +382,21 @@ def ui_session_registry():
     结构由 backend.ui.session_collect 自管理：{"_locks": {key: Lock}, "_renewed": {key: True|err}}。
     """
     return {"_locks": {}, "_renewed": {}}
+
+
+@pytest.fixture(scope="session")
+def ui_browser_pool():
+    """UI 浏览器实例池（三期：执行提速，见《UI自动化三期》设计文档阶段 1）。
+
+    生命周期归单 pytest 进程（批次 = subprocess 起 main.py，每批一进程）：
+    同 (browser, headless) 分组只 launch 一次，每条用例仅新开 context（隔离语义不变），
+    批次收尾 close_all 统一回收，不留长驻浏览器进程。
+    采集链路不注入本池（session_collect 直接执行 UiRunner 无 pool），崩溃不牵连批次。
+    """
+    from core.engines.web.browser_pool import BrowserPool
+
+    pool = BrowserPool()
+    try:
+        yield pool
+    finally:
+        pool.close_all()

@@ -698,6 +698,16 @@ watch(runId, () => load());
             </el-table>
           </el-tab-pane>
           <el-tab-pane v-if="detail.ui_steps && detail.ui_steps.length" label="UI 步骤" name="ui">
+            <!-- 三期-B 重试标注：让 flaky 可见而非被吞；未重试的存量报告不出现此块 -->
+            <el-alert v-if="detail.ui_retry && detail.ui_retry.attempts > 1" :closable="false"
+              :type="detail.ui_retry.final_ok ? 'warning' : 'error'" style="margin-bottom: 8px"
+              :title="detail.ui_retry.final_ok
+                ? `重试 ${detail.ui_retry.attempts - 1} 次后通过（属 flaky，建议关注首次失败原因）`
+                : `重试 ${detail.ui_retry.attempts - 1} 次后仍失败`">
+              <div v-for="h in detail.ui_retry.history" :key="h.attempt" style="font-size: 12px; line-height: 1.7">
+                第 {{ h.attempt }} 次失败：{{ h.error || "步骤未通过" }}
+              </div>
+            </el-alert>
             <div class="dim" style="margin-bottom: 8px">按序执行，任一步失败即中断并截全屏；点截图可放大查看。</div>
             <el-table :data="detail.ui_steps" size="small">
               <el-table-column label="#" width="44">

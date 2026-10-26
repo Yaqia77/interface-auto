@@ -56,6 +56,8 @@ export interface UiCaseItem {
   post_scripts: string[];
   /** 引用的登录态会话 id（开机加载其 storage_state）；null/缺省=不引用 */
   session?: string | null;
+  /** 失败重试次数 0–3（三期-B；任一次通过即判通过，缺省=0 不重试） */
+  retry?: number;
 }
 
 export interface UiCasePage {
@@ -322,6 +324,24 @@ export interface RunCaseDetail {
   scripts: ScriptTraceItem[];
   /** UI 用例步骤轨迹（接口用例为 null）；截图经 /api/runs/{id}/attachment/{screenshot_source} 取图 */
   ui_steps: UiStepTrace[] | null;
+  /** UI 重试轨迹（三期-B）；未发生重试/非 UI 用例为 null */
+  ui_retry?: UiRetryTrace | null;
+}
+
+/** UI 重试单次失败摘要（后端已掩码） */
+export interface UiRetryAttemptInfo {
+  attempt: number;
+  ok: boolean;
+  error: string | null;
+  duration_ms: number;
+  steps_failed: number;
+}
+
+/** UI 重试轨迹汇总（「UI重试轨迹」附件解析结果） */
+export interface UiRetryTrace {
+  attempts: number;
+  final_ok: boolean;
+  history: UiRetryAttemptInfo[];
 }
 
 /** UI 单步执行轨迹（core.ui_runner 落「UI步骤」附件，后端已掩码） */

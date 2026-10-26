@@ -133,7 +133,7 @@ def list_cases(results_dir: Path) -> dict:
             "error": mask_text((r.get("statusDetails") or {}).get("message", ""))[:1200],
             "assert_total": assert_total,
             "assert_failed": assert_failed,
-            "summary": _result_summary(status, asserts),
+            "summary": _result_summary(status, asserts) + _ui_retry_annotation(results_dir, r),
         })
     return {"total": len(summary), "stats": stats, "items": summary}
 
@@ -217,6 +217,9 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
         detail["scripts"] = mask_obj(trace) if isinstance(trace, list) else []
         # UI 步骤轨迹：接口用例无此附件返回 None；截图附件名解析为 allure source 文件名供前端取图
         detail["ui_steps"] = _ui_steps(results_dir, r)
+        # UI 重试轨迹（三期-B）：未发生重试的批次返回 None，存量报告形状不变
+        retry_trace = _load_json_attachment(results_dir, r, "UI重试轨迹")
+        detail["ui_retry"] = mask_obj(retry_trace) if isinstance(retry_trace, dict) else None
         return detail
     return None
 
@@ -231,3 +234,18 @@ def _ui_steps(results_dir: Path, result: dict):
         if isinstance(s, dict) and s.get("screenshot"):
             s["screenshot_source"] = att_map.get(s["screenshot"])
     return mask_obj(steps)
+
+
+def _ui_retry_annotation(results_dir: Path, result: dict) -> str:
+    """发生过重试时给摘要追加标注（让 flaky 可见而非被吞）；无重试附件返回空串，零额外 IO。"""
+    src = _find_attachment(result, "UI重试轨迹")
+    if not src:
+        return ""
+    trace = _load_json_attachment(results_dir, result, "UI重试轨迹")
+    if not isinstance(trace, dict):
+        return ""
+    attempts = int(trace.get("attempts") or 1)
+    if attempts <= 1:
+        return ""
+    tail = "后通过" if trace.get("final_ok") else "仍未通过"
+    return f"〔重试 {attempts - 1} 次{tail}〕"

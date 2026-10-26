@@ -19,6 +19,9 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 VALID_PRIORITIES = {"P0", "P1", "P2", "P3", "P4", "P5"}
 VALID_BROWSERS = {"chromium", "firefox", "webkit"}
 
+# 失败重试上限（三期-B）：最多 3 次额外尝试；默认 0=不重试，保证存量行为不变。
+MAX_RETRY = 3
+
 # 步骤动作元数据：desc 中文名；locator/value 标记该动作是否需要定位器/取值。
 ACTIONS: dict[str, dict] = {
     "goto":           {"desc": "打开地址", "locator": False, "value": True},
@@ -181,6 +184,13 @@ def validate_case(raw: dict) -> dict:
     # 会话库读不到时用例仍应能被列出/保存（元数据非执行体），执行期由 session_collect 解析。
     session = str(raw.get("session") or "").strip() or None
 
+    # 失败重试次数（三期-B）：宽归一化而非拒绝——非法/负数一律收敛到 0（不重试），
+    # 上限截断到 MAX_RETRY；默认 0 保证存量用例逐条行为不变。
+    try:
+        retry = max(0, min(int(raw.get("retry") or 0), MAX_RETRY))
+    except (TypeError, ValueError):
+        retry = 0
+
     return {
         "case_id": case_id,
         "module": str(raw.get("module") or "未分类").strip() or "未分类",
@@ -195,6 +205,7 @@ def validate_case(raw: dict) -> dict:
         "pre_scripts": _str_list("pre_scripts"),
         "post_scripts": _str_list("post_scripts"),
         "session": session,
+        "retry": retry,
     }
 
 

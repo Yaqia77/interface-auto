@@ -39,6 +39,7 @@ class UiCaseOut(BaseModel):
     pre_scripts: list[str] = Field(default_factory=list)
     post_scripts: list[str] = Field(default_factory=list)
     session: str | None = Field(default=None, description="引用的登录态会话 id（开机加载其 storage_state）")
+    retry: int = Field(default=0, description="失败重试次数 0–3（三期-B；任一次通过即判通过，采集模式不重试）")
 
 
 class UiCasePage(BaseModel):
@@ -62,6 +63,7 @@ class UiCaseCreate(BaseModel):
     pre_scripts: list[str] = Field(default_factory=list)
     post_scripts: list[str] = Field(default_factory=list)
     session: str | None = Field(default=None, description="引用的登录态会话 id（可选）")
+    retry: int = Field(default=0, ge=0, le=3, description="失败重试次数（0=不重试）")
 
 
 class UiCaseUpdate(BaseModel):
@@ -79,6 +81,7 @@ class UiCaseUpdate(BaseModel):
     pre_scripts: list[str] | None = None
     post_scripts: list[str] | None = None
     session: str | None = Field(default=None, description="引用的登录态会话 id（传空串=取消引用）")
+    retry: int | None = Field(default=None, ge=0, le=3, description="失败重试次数（不传=保持原值）")
 
 
 class UiCaseMove(BaseModel):

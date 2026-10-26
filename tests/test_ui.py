@@ -37,7 +37,7 @@ def _attach_png(name, data):
         allure.attach(name=name, body=data, attachment_type=allure.attachment_type.PNG)
 
 
-def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_registry):
+def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_registry, ui_browser_pool):
     if HAS_ALLURE:
         allure.dynamic.title(f"[{ui_case.get('priority')}] {ui_case.get('case_id')} {ui_case.get('name')}")
         allure.dynamic.feature(ui_case.get("module", ""))
@@ -59,13 +59,22 @@ def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_regi
     # 统一执行入口：按 key 取引擎多态执行（内部委托 UiRunner，与旧直调完全一致）。
     # 二期登录态复用：注入 session_provider 把 case.session 解析成可加载的 storage_state；
     # 未引用会话的存量用例 provider 返回 (None, None)，行为与 v1 完全一致。
+    # 三期执行提速：注入进程级 ui_browser_pool，浏览器跨用例复用（context 级隔离不变）。
+    # 三期重试（B1）：优先级 用例 retry(>0) > 批次默认 ui.retry_default > 0；
+    # 存量 JSON 无 retry 键时取 0，行为与二期逐条一致（不重试）。
     from backend.ui import session_collect
+
+    case_retry = int(ui_case.get("retry") or 0)
+    batch_default = int(((app_config.get("config") or {}).get("ui") or {}).get("retry_default") or 0)
+    retry = case_retry if case_retry > 0 else batch_default
 
     result = get_engine("web").execute(
         ui_case, context, base_url=base_url,
         attach=(_attach_png if HAS_ALLURE else None),
         step=(_step_cm if HAS_ALLURE else None),
         session_provider=lambda c: session_collect.resolve_for_attach(c, ui_session_registry),
+        browser_pool=ui_browser_pool,
+        retry=retry,
     )
 
     if HAS_ALLURE:
@@ -73,6 +82,14 @@ def test_ui(ui_case, app_config, context, dep_map, case_results, ui_session_regi
             json.dumps(result.steps, ensure_ascii=False, indent=2, default=str),
             name="UI步骤", attachment_type=allure.attachment_type.JSON,
         )
+        # 重试轨迹仅在真发生过重试（attempts>1）时附加：存量批次报告形状不变（向后兼容）
+        if result.attempts > 1:
+            allure.attach(
+                json.dumps({"attempts": result.attempts, "final_ok": result.ok,
+                            "history": result.attempt_history},
+                           ensure_ascii=False, indent=2, default=str),
+                name="UI重试轨迹", attachment_type=allure.attachment_type.JSON,
+            )
 
     if not result.ok:
         case_results[ui_case.get("case_id")] = "failed"

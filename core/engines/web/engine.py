@@ -11,6 +11,11 @@ attach=(name, png_bytes) 落图），由 tests/test_ui.py 负责胶水，保持 
 storage_state 实体路径并在 new_context 时加载（开机即已登录）；mode="collect" 则在步骤全部成功后
 用 context.storage_state(path=..) 导出登录态，交 session_committer 原子落盘。provider/committer
 均由上层注入，core 不依赖 backend；不引用会话的存量用例行为与 v1 完全一致。
+
+三期（执行提速）：可注入 browser_pool（BrowserPool）。有池时浏览器跨用例复用——每条用例只
+new_context（context 级隔离原样保留）并在收尾**只关 context 不关 browser**；无池时保持逐条
+独立启停的二期行为（向后兼容底线）。采集模式(mode="collect")永不进池：同步短任务独立启停，
+崩溃不牵连批次。
 """
 from __future__ import annotations
 
@@ -19,11 +24,14 @@ import time
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from loguru import logger
 
 from core.variable import render
+
+if TYPE_CHECKING:  # 仅类型标注：core 不强依赖池实现，运行期按鸭子类型消费
+    from core.engines.web.browser_pool import BrowserPool
 
 # 步骤默认操作超时（毫秒）：定位/断言等待上限，环境慢时可在用例层调整（v1 固定）
 _DEFAULT_TIMEOUT_MS = 8000
@@ -42,10 +50,26 @@ class UiRunResult:
     extracted: dict = field(default_factory=dict)      # 本条用例提取到的变量（已写入 ctx）
     storage_state: Optional[str] = None                # 复用时加载的登录态实体路径（None=裸上下文）
     collected: Optional[str] = None                    # 采集模式导出的临时 storage_state 路径（供回写器落盘）
+    # 三期-B 重试：attempts=实际尝试次数（1=未重试，与存量语义一致）；
+    # attempt_history=此前各次失败摘要（末次结果不重复入列），供报告展示「重试 k 次后通过」。
+    attempts: int = 1
+    attempt_history: list[dict] = field(default_factory=list)
 
 
 class UiRunnerError(Exception):
     """浏览器/动作层的可恢复错误，统一转成用例失败而非崩溃。"""
+
+
+# 浏览器「中途崩溃/断连」类报错特征：命中即标 bundle dead，下次 acquire 触发重启（三期-安全阀）
+_BROWSER_DEAD_HINTS = (
+    "target closed", "browser has been closed", "browser closed",
+    "connection closed", "has been closed", "browsercontext has been closed",
+)
+
+
+def _looks_browser_dead(msg: str) -> bool:
+    low = (msg or "").lower()
+    return any(h in low for h in _BROWSER_DEAD_HINTS)
 
 
 def _resolve_locator(page, locator: str):
@@ -115,7 +139,9 @@ class UiRunner:
                  output_dir: Optional[Path] = DEFAULT_OUTPUT_DIR,
                  mode: str = "normal",
                  session_provider: Optional[Callable[[dict], tuple]] = None,
-                 session_committer: Optional[Callable[[dict, str], None]] = None):
+                 session_committer: Optional[Callable[[dict, str], None]] = None,
+                 browser_pool: Optional["BrowserPool"] = None,
+                 attempt: int = 1):
         self.ctx = ctx
         self.base_url = base_url
         self._attach = attach
@@ -128,6 +154,11 @@ class UiRunner:
         self.mode = mode
         self._session_provider = session_provider
         self._session_committer = session_committer
+        # browser_pool（三期）：注入即跨用例复用浏览器进程；采集模式强制不进池（独立启停隔离风险）。
+        self._browser_pool = browser_pool
+        # attempt（三期-B）：第几次尝试（1 起）。仅影响截图命名（>1 时加「第N试」前缀），
+        # 保证 retry=0 的存量用例截图名与二期逐字节一致。
+        self.attempt = max(1, int(attempt))
 
     def _step_cm(self, label: str):
         return self._step(label) if self._step else nullcontext()
@@ -140,6 +171,10 @@ class UiRunner:
         pw = None
         browser = None
         page = None
+        context = None
+        bundle = None
+        # 采集模式永不进池（设计护栏：采集是同步短任务，崩溃不牵连批次）；无池 = 二期逐条独立启停现状。
+        use_pool = self._browser_pool is not None and self.mode != "collect"
         try:
             # 登录态解析前置到启动浏览器之前：引用会话且解析失败即中断，既不浪费一次浏览器启动，
             # 也不会把「未登录」当「已登录」继续跑。采集模式从裸浏览器起步（要从不登录走到登录再导出），
@@ -150,10 +185,15 @@ class UiRunner:
                     raise UiRunnerError(ss_err)
                 result.storage_state = storage_state
 
-            from playwright.sync_api import sync_playwright
-            pw = sync_playwright().start()
-            browser = self._launch(pw, browser_name, headless)
-            context = self._new_context(browser, result.storage_state)
+            if use_pool:
+                # 复用链路：browser 跨用例常驻，本条用例只领一个新 context —— 隔离语义与二期逐字一致
+                bundle = self._browser_pool.acquire(browser=browser_name, headless=headless)
+                context = bundle.new_context(result.storage_state)
+            else:
+                from playwright.sync_api import sync_playwright
+                pw = sync_playwright().start()
+                browser = self._launch(pw, browser_name, headless)
+                context = self._new_context(browser, result.storage_state)
             page = context.new_page()
             page.set_default_timeout(_DEFAULT_TIMEOUT_MS)
             self.page = page
@@ -189,14 +229,27 @@ class UiRunner:
             if page is not None:
                 self._capture(page, (result.steps[-1] if result.steps else {}), "异常现场")
             logger.error("[{}] UI 执行异常: {}", case.get("case_id"), e)
+            # 崩溃/断连类异常：标记该束已死，下一条用例 acquire 时自动换新（环境噪声不累积）
+            if use_pool and bundle is not None and _looks_browser_dead(result.error):
+                self._browser_pool.invalidate(bundle)
         finally:
-            for closer in (lambda: page and page.close(),
-                           lambda: browser and browser.close(),
-                           lambda: pw and pw.stop()):
-                try:
-                    closer()
-                except Exception:  # noqa: BLE001
-                    pass
+            if use_pool:
+                # 只关 page/context，绝不关 browser/playwright —— 这正是本期折叠掉的固定开销所在。
+                # context 关闭失败也不放过 page 的回收尝试；bundle 是否报废由下次 acquire 探活决定。
+                for closer in (lambda: page and page.close(),
+                               lambda: context and context.close()):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
+            else:
+                for closer in (lambda: page and page.close(),
+                               lambda: browser and browser.close(),
+                               lambda: pw and pw.stop()):
+                    try:
+                        closer()
+                    except Exception:  # noqa: BLE001
+                        pass
             result.duration = time.perf_counter() - start
         return result
 
@@ -252,10 +305,13 @@ class UiRunner:
         return base / f".collect-{case.get('case_id', 'case')}-{int(time.time() * 1000)}.json"
 
     @staticmethod
-    def _launch(pw, name: str, headless: bool = True):
+    def _launch(pw, name: str, headless: bool = True, channel: Optional[str] = None):
         launcher = getattr(pw, name, None)
         if launcher is None:
             raise UiRunnerError(f"不支持的浏览器: {name}（可用 chromium/firefox/webkit）")
+        if channel:
+            # 显式通道（如本机 Chrome）：失败即抛，不再走内核缺失回退（调用方已明确指定）
+            return launcher.launch(headless=headless, channel=channel)
         try:
             return launcher.launch(headless=headless)
         except Exception as e:  # noqa: BLE001 内核缺失时走兼容回退
@@ -395,7 +451,8 @@ class UiRunner:
         try:
             target = locator if locator is not None else page
             png = target.screenshot(full_page=(locator is None))
-            att_name = f"截图-{name_suffix}-{entry.get('index', 0)}.png"
+            prefix = f"第{self.attempt}试-" if self.attempt > 1 else ""  # retry=0 存量命名不变
+            att_name = f"截图-{prefix}{name_suffix}-{entry.get('index', 0)}.png"
             saved = False
             if self.output_dir is not None:
                 try:
@@ -466,8 +523,46 @@ class WebEngine(Engine):
                 mode: str = "normal",
                 session_provider: Optional[Callable[[dict], tuple]] = None,
                 session_committer: Optional[Callable[[dict, str], None]] = None,
+                browser_pool: Optional["BrowserPool"] = None,
+                retry: Optional[int] = None,
                 output_dir: Optional[Path] = DEFAULT_OUTPUT_DIR, **deps) -> UiRunResult:
-        """执行一条 UI 用例，委托 UiRunner（与旧直调 .run() 完全一致）→ UiRunResult。"""
-        return UiRunner(ctx, base_url, attach=attach, step=step, output_dir=output_dir,
-                        mode=mode, session_provider=session_provider,
-                        session_committer=session_committer).run(case)
+        """执行一条 UI 用例 → UiRunResult。
+
+        browser_pool（三期）：注入即启用浏览器跨用例复用；未注入的存量调用点行为不变。
+        retry（三期-B）：失败重试次数。生效优先级 显式 retry 入参 > 用例 retry > 0；
+        采集模式（mode="collect"）永不重试（设计护栏：采集失败直接反馈，交由重采/手动）。
+        重试语义：任一次通过即最终通过；全失败保留末次错误与轨迹，各次失败摘要入
+        attempt_history（报告页展示「重试 k 次后通过」，让 flaky 可见而非被吞）。
+        """
+        effective = self._effective_retry(case, mode, retry)
+        result: UiRunResult = UiRunResult(case_id="")
+        history: list[dict] = []
+        for attempt in range(1, effective + 2):  # effective+1 次尝试（首次 + 重试）
+            result = UiRunner(ctx, base_url, attach=attach, step=step, output_dir=output_dir,
+                              mode=mode, session_provider=session_provider,
+                              session_committer=session_committer,
+                              browser_pool=browser_pool, attempt=attempt).run(case)
+            if result.ok or attempt == effective + 1:
+                break
+            history.append({"attempt": attempt, "ok": False,
+                            "error": result.error, "duration_ms": int(result.duration * 1000),
+                            "steps_failed": sum(1 for s in result.steps if not s.get("ok"))})
+            logger.warning("[{}] 第 {} 次尝试失败，重试中（剩余 {} 次）: {}",
+                           case.get("case_id"), attempt, effective + 1 - attempt, result.error)
+        result.attempts = len(history) + 1
+        result.attempt_history = history
+        if result.attempts > 1 and not result.ok:
+            result.error = f"重试 {result.attempts - 1} 次后仍失败：{result.error}"
+        return result
+
+    @staticmethod
+    def _effective_retry(case: dict, mode: str, retry: Optional[int]) -> int:
+        """重试上限归一：0..3；采集模式恒 0。入参 > 用例字段 > 0（批次默认由调用方折算后传入 retry）。"""
+        if mode == "collect":
+            return 0
+        raw = retry if retry is not None else (case or {}).get("retry")
+        try:
+            val = int(raw or 0)
+        except (TypeError, ValueError):
+            val = 0
+        return max(0, min(val, 3))

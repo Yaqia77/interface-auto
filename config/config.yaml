@@ -33,6 +33,10 @@ report:
   html: true        # 每次运行生成 reports/<时间戳>/report.html（单文件，双击可看）
   allure: true      # 每次运行生成 reports/<时间戳>/allure-results/
 
+# UI 自动化执行参数（三期-B）：批次级默认值，用例显式设了 retry(>0) 时以用例为准
+ui:
+  retry_default: 0  # 失败重试次数默认值（0–3，0=不重试；采集模式永不重试）
+
 # 日志
 log:
   level: INFO       # DEBUG / INFO / WARNING / ERROR
