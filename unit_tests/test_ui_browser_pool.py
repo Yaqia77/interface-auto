@@ -87,8 +87,8 @@ class FakeLauncher:
 class FakePW:
     """假 playwright 句柄：chromium 属性即假 launcher。"""
 
-    def __init__(self, browser: FakeBrowser):
-        self.chromium = FakeLauncher(browser)
+    def __init__(self, browser: FakeBrowser | None = None):
+        self.chromium = FakeLauncher(browser or FakeBrowser())
         self.stopped = False
 
     def stop(self):
@@ -96,21 +96,23 @@ class FakePW:
 
 
 def make_pool(reap_after: int = 200, raise_on_new_page: str | None = None):
-    """造（pool, launched）：launch_fn 每次产出全新假 (pw, browser) 对并登记，便于断言启动次数。
+    """造（pool, launched）：launch_fn 在共享 pw 上产出新假 browser 并登记，便于断言启动次数。
 
+    新契约（共享 pw）：launch_fn(pw, browser, headless, channel) -> browser；
+    pw_factory 只在池首次需要时调一次（同线程第二实例会炸，真 driver 限制）。
     raise_on_new_page 只对**第一束**生效：模拟「旧浏览器崩溃、重启后的新浏览器恢复」。
     """
     launched: list[tuple[FakePW, FakeBrowser]] = []
     pending = [raise_on_new_page]
 
-    def launch_fn(browser: str, headless: bool, channel=None):
+    def launch_fn(pw, browser: str, headless: bool, channel=None):
         br = FakeBrowser(raise_on_new_page=pending[0])
         pending[0] = None
-        pw = FakePW(br)
         launched.append((pw, br))
-        return pw, br
+        return br
 
-    return BrowserPool(reap_after=reap_after, launch_fn=launch_fn), launched
+    pool = BrowserPool(reap_after=reap_after, launch_fn=launch_fn, pw_factory=FakePW)
+    return pool, launched
 
 
 # ==================== BrowserPool：复用/分组 ====================
@@ -132,6 +134,59 @@ def test_different_specs_get_separate_bundles():
     pool.acquire(browser="chromium", headless=False)
     pool.acquire(browser="firefox", headless=True)
     assert len(launched) == 3 == pool.launch_count
+    # 真 driver 核心不变式：多束共享同一个 playwright 实例（同线程第二实例必炸）
+    assert launched[0][0] is launched[1][0] is launched[2][0]
+    pool.close_all()
+
+
+def test_shared_pw_started_only_once_across_specs():
+    """headless+headful 混用：pw_factory 只调一次（共享），browser 各束独立。"""
+    pw_starts: list[FakePW] = []
+
+    def pw_factory():
+        pw = FakePW()
+        pw_starts.append(pw)
+        return pw
+
+    launched: list[tuple[FakePW, FakeBrowser]] = []
+
+    def launch_fn(pw, browser, headless, channel=None):
+        br = FakeBrowser()
+        launched.append((pw, br))
+        return br
+
+    pool = BrowserPool(launch_fn=launch_fn, pw_factory=pw_factory)
+    pool.acquire(headless=True)
+    pool.acquire(headless=False)   # 旧缺陷触发点：第二束曾试图再起一个 pw
+    assert len(pw_starts) == 1
+    assert len(launched) == 2 and pool.launch_count == 2
+    assert all(pw is pw_starts[0] for pw, _ in launched)
+    pool.close_all()
+    assert pw_starts[0].stopped and pool._pw is None
+
+
+def test_launch_failure_rebuilds_shared_pw_and_retries_once():
+    """共享 pw 疑似失联：launch 失败 → 停旧 pw、重建、重试一次成功。"""
+    pws: list[FakePW] = []
+
+    def pw_factory():
+        pw = FakePW()
+        pws.append(pw)
+        return pw
+
+    calls: list[int] = []
+
+    def launch_fn(pw, browser, headless, channel=None):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("Connection closed")   # 第一次：pw 失联
+        return FakeBrowser()
+
+    pool = BrowserPool(launch_fn=launch_fn, pw_factory=pw_factory)
+    bundle = pool.acquire()
+    assert pool.launch_count == 1
+    assert pws[0].stopped is True and not pws[1].stopped   # 旧 pw 被停，新 pw 接替
+    assert bundle.pw is pws[1]
     pool.close_all()
 
 
@@ -156,7 +211,7 @@ def test_reap_after_threshold_recycles_bundle():
     third = pool.acquire()       # 第 3 条：跑满 2 条 → 回收旧束、重启新束
     assert third is not first
     assert len(launched) == 2 == pool.launch_count
-    assert first.browser.closed and first.pw.stopped   # 旧束整体回收（browser+pw 都停）
+    assert first.browser.closed and not first.pw.stopped   # 旧束只关 browser，共享 pw 不停
     pool.close_all()
 
 
@@ -175,7 +230,7 @@ def test_disconnected_bundle_restarts_on_next_acquire():
     second = pool.acquire()
     assert second is not first
     assert len(launched) == 2
-    assert first.browser.closed and first.pw.stopped
+    assert first.browser.closed and not first.pw.stopped   # 束回收不碰共享 pw
     pool.close_all()
 
 
@@ -196,7 +251,9 @@ def test_close_all_reclaims_every_bundle():
     b = pool.acquire(browser="chromium", headless=False)
     pool.close_all()
     assert all(x.closed for x in (a, b))
-    assert all(br.closed and pw.stopped for pw, br in launched)
+    assert all(br.closed for _, br in launched)
+    assert all(pw.stopped for pw, _ in launched)   # 共享 pw 在 close_all 统一停止
+    assert pool._pw is None
     assert pool._bundles == {}
     # close_all 幂等；再次 acquire 走全新启动
     pool.close_all()
@@ -209,7 +266,7 @@ def test_bundle_close_is_idempotent():
     bundle = BrowserBundle(pw, br, ("chromium", True, ""))
     bundle.close()
     bundle.close()
-    assert br.closed and pw.stopped
+    assert br.closed and not pw.stopped   # 束只关 browser；共享 pw 归池统一停
 
 
 # ==================== UiRunner：池链路语义（只关 context 不关 browser） ====================

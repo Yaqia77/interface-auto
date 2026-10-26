@@ -1132,7 +1132,7 @@ onMounted(async () => {
               </el-descriptions>
             </template>
           </el-table-column>
-          <el-table-column type="selection" width="45" reserve-selection />
+          <el-table-column type="selection" width="45" fixed="left" reserve-selection />
           <el-table-column prop="case_id" label="用例编号" min-width="150">
             <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
           </el-table-column>
@@ -1442,7 +1442,7 @@ onMounted(async () => {
           <el-table ref="smartTableRef" :data="smartData.items" size="small" max-height="440"
                     row-key="row" :row-class-name="smartRowClass" style="margin-top: 8px"
                     @selection-change="(rows: ImportPreviewItem[]) => (smartSelected = rows)">
-            <el-table-column type="selection" width="42" :selectable="smartSelectable" reserve-selection />
+            <el-table-column type="selection" width="42" fixed="left" :selectable="smartSelectable" reserve-selection />
             <el-table-column label="编号" width="120">
               <template #default="{ row }"><span class="mono">{{ row.case.case_id }}</span></template>
             </el-table-column>

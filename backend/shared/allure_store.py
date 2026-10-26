@@ -224,12 +224,24 @@ def case_detail(results_dir: Path, case_id: str) -> dict | None:
     return None
 
 
+def _collect_attachment_map(node: dict, out: dict) -> None:
+    """递归收集 allure 附件 name→source：步骤执行中 attach 的附件（如手动截图步）落在
+    steps[].attachments 而非顶层，只查顶层会漏映截图源。"""
+    for a in node.get("attachments") or []:
+        if a.get("name") and a.get("source"):
+            out.setdefault(a["name"], a["source"])
+    for st in node.get("steps") or []:
+        if isinstance(st, dict):
+            _collect_attachment_map(st, out)
+
+
 def _ui_steps(results_dir: Path, result: dict):
     """从 allure-results 读取「UI步骤」附件并回填每步截图的可访问文件名。"""
     steps = _load_json_attachment(results_dir, result, "UI步骤")
     if not isinstance(steps, list):
         return None
-    att_map = {a.get("name"): a.get("source") for a in result.get("attachments", [])}
+    att_map: dict = {}
+    _collect_attachment_map(result, att_map)
     for s in steps:
         if isinstance(s, dict) and s.get("screenshot"):
             s["screenshot_source"] = att_map.get(s["screenshot"])

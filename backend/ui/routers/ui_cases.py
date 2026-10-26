@@ -5,12 +5,14 @@ file（.json）透传给本组接口；权限直接复用 case:write / case:dele
 """
 from pathlib import Path
 
+import json
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
 from backend.shared import authz
 from backend.ui import ui_case_store
 from backend.ui.schemas import (UiCaseCreate, UiCaseMove, UiCaseOut, UiCasePage,
-                             UiCaseUpdate)
+                             UiCaseUpdate, UiImportReq)
 from backend.ui.ui_case_store import UiCaseError
 
 ROOT = Path(__file__).resolve().parents[3]  # 项目根（backend/ui/routers/ 上溯三级）
@@ -80,6 +82,95 @@ def list_variables(file: str = Query(..., description="UI 项目的用例 JSON �
         "excel_variables": extracted,
         "secret_variables": sorted(excel_loader.load_secret_vars(ROOT / "data" / "secret_vars.xlsx")),
     }
+
+
+@router.get("/template", summary="下载 UI 用例批量导入模板（JSON，内嵌字段说明与两个示例）")
+def download_template():
+    """模板与 /import 接收结构同构：cases 数组，每条字段与单条新增接口一致。"""
+    tpl = {
+        "_usage": [
+            "UI 用例批量导入模板：cases 为数组，每条字段与页面「新增 UI 用例」同构。",
+            "必填：case_id（项目内唯一）、steps（每步 {action, locator?, value?}）。",
+            "可选：name/module/desc/priority(P0~P5,默认P2)/run(默认true)/browser(chromium|firefox|webkit)/"
+            "headless(默认true)/retry(0~3)/extract([{var,source}])/session(登录态 id，不用传 null)。",
+            "动作白名单：goto/click/fill/press/select/check/hover/wait_for/screenshot/"
+            "expect_visible/expect_text/expect_url；定位器用 css= 前缀，select 按选项文本匹配。",
+            "步骤取值可引用 {{变量名}}（环境/凭证/本条 extract 提取的变量）。",
+            "导入规则：逐条全量校验，编号重复跳过，字段非法逐条报因不阻断其他条；单次上限 64 条。",
+        ],
+        "cases": [
+            {
+                "case_id": "demo_basic_001",
+                "name": "登录页打开与标题断言",
+                "module": "登录",
+                "desc": "示例一：基础链路（打开→断言可见/文本）",
+                "priority": "P1",
+                "run": True,
+                "browser": "chromium",
+                "headless": True,
+                "retry": 0,
+                "session": None,
+                "steps": [
+                    {"action": "goto", "value": "https://example.com/login"},
+                    {"action": "expect_visible", "locator": "css=#title"},
+                    {"action": "expect_text", "locator": "css=#title", "value": "登录"},
+                ],
+            },
+            {
+                "case_id": "demo_login_002",
+                "name": "登录并提取订单号",
+                "module": "登录",
+                "desc": "示例二：表单交互 + 变量提取 + 重试兜底 + 截图留证",
+                "priority": "P1",
+                "run": True,
+                "browser": "chromium",
+                "headless": True,
+                "retry": 2,
+                "session": None,
+                "steps": [
+                    {"action": "goto", "value": "https://example.com/login"},
+                    {"action": "fill", "locator": "css=#username", "value": "{{username}}"},
+                    {"action": "fill", "locator": "css=#password", "value": "{{password}}"},
+                    {"action": "click", "locator": "css=#submit"},
+                    {"action": "wait_for", "locator": "css=.order-id"},
+                    {"action": "screenshot"},
+                ],
+                "extract": [{"var": "order_id", "source": "text|css=.order-id"}],
+            },
+        ],
+    }
+    return Response(content=json.dumps(tpl, ensure_ascii=False, indent=2),
+                    media_type="application/json",
+                    headers={"Content-Disposition": 'attachment; filename="ui_cases_template.json"'})
+
+
+@router.post("/import", summary="批量导入 UI 用例（逐条校验；编号重复跳过，非法逐条报因）")
+def import_cases(body: UiImportReq,
+                 file: str = Query(..., description="UI 项目的用例 JSON 路径（相对项目根）"),
+                 _: dict = Depends(authz.require_perm("case:write"))):
+    path = _resolve_file(file)
+    if not body.cases:
+        raise HTTPException(status_code=400, detail="cases 为空数组，没有可导入的用例")
+    if len(body.cases) > 64:
+        raise HTTPException(status_code=400, detail="单次导入上限 64 条，请分批导入")
+    imported: list[str] = []
+    skipped: list[str] = []
+    errors: list[str] = []
+    for i, c in enumerate(body.cases, 1):
+        if not isinstance(c, dict):
+            errors.append(f"第 {i} 项：必须是 JSON 对象")
+            continue
+        cid = str(c.get("case_id") or f"第 {i} 项")
+        try:
+            ui_case_store.create_case(path, c)
+            imported.append(cid)
+        except UiCaseError as e:
+            if e.kind == "conflict":
+                skipped.append(cid)
+            else:
+                errors.append(f"{cid}: {e}")
+    return {"imported": len(imported), "imported_ids": imported,
+            "skipped": skipped, "errors": errors}
 
 
 @router.get("/{case_id}", response_model=UiCaseOut, summary="UI 用例详情")

@@ -91,6 +91,12 @@ class UiCaseMove(BaseModel):
     new_module: str | None = Field(default=None, description="迁移后归入的模块名（留空=保留原模块）")
 
 
+class UiImportReq(BaseModel):
+    """批量导入 UI 用例（逐条走单条创建同一校验；编号重复跳过，字段非法逐条报因）。"""
+
+    cases: list[dict] = Field(default_factory=list, description="用例 JSON 数组，字段与单条创建接口同构")
+
+
 # ==================== UI 登录态会话（二期 storage_state 复用，全局注册表） ====================
 
 

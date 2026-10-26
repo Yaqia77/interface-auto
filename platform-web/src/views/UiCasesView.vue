@@ -5,7 +5,7 @@
  * 与接口用例（CasesView 的 Excel 形态）分轨：数据全部走 /api/ui-cases，载体是 JSON。
  * 本页自包含拉取逻辑，CasesView 在选中 UI 项目时整体委托给它，接口链路互不影响。
  */
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
@@ -85,6 +85,10 @@ const pagedCases = computed(() => {
   return sortedCases.value.slice(start, start + pageSize.value);
 });
 
+// 固定列（选择/操作）在数据变化后重算布局，避免翻页热区错位（同 CasesView 实践）
+const tableRef = ref<{ doLayout: () => void } | null>(null);
+watch(pagedCases, () => nextTick(() => tableRef.value?.doLayout()));
+
 function selectModule(m: string) {
   activeModule.value = m;
   currentPage.value = 1;
@@ -142,6 +146,65 @@ async function doMove() {
   await search();
   await loadMeta();
   emit("projects-changed");
+}
+
+/* ================= 批量导入（模板下载 + JSON 文件/粘贴） ================= */
+const importVisible = ref(false);
+const importRaw = ref("");
+const importSaving = ref(false);
+const importResult = ref<{ imported: number; imported_ids: string[]; skipped: string[]; errors: string[] } | null>(null);
+
+function openImport() {
+  importRaw.value = "";
+  importResult.value = null;
+  importSaving.value = false;
+  importVisible.value = true;
+}
+
+async function downloadTemplate() {
+  try {
+    const blob = await api.downloadUiCaseTemplate();
+    const url = URL.createObjectURL(new Blob([blob], { type: "application/json" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "ui_cases_template.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch { /* 拦截器已提示 */ }
+}
+
+// 解析粘贴/上传的 JSON：兼容 {cases:[…]} 模板形态与裸数组 […]，结果供预览与导入共用
+const importParsed = computed<{ ok: boolean; cases: Record<string, unknown>[]; err: string }>(() => {
+  const text = importRaw.value.trim();
+  if (!text) return { ok: false, cases: [], err: "" };
+  try {
+    const data = JSON.parse(text);
+    const arr = Array.isArray(data) ? data : data?.cases;
+    if (!Array.isArray(arr)) return { ok: false, cases: [], err: "JSON 需为用例数组，或含 cases 数组的对象（同模板结构）" };
+    return { ok: true, cases: arr, err: "" };
+  } catch (e) {
+    return { ok: false, cases: [], err: `JSON 解析失败：${(e as Error).message}` };
+  }
+});
+
+function onFileChange(uploadFile: any) {
+  const rawFile: File | undefined = uploadFile?.raw;
+  if (!rawFile) return;
+  rawFile.text().then((t) => { importRaw.value = t; }).catch(() => ElMessage.error("读取文件失败"));
+}
+
+async function doImport() {
+  const parsed = importParsed.value;
+  if (!parsed.ok) { ElMessage.error(parsed.err || "请先粘贴或上传 JSON"); return; }
+  if (!parsed.cases.length) { ElMessage.error("cases 为空数组，没有可导入的用例"); return; }
+  importSaving.value = true;
+  try {
+    const resp = await api.importUiCases(parsed.cases, props.file);
+    importResult.value = resp;
+    if (resp.imported) { await search(); await loadMeta(); emit("projects-changed"); }
+  } catch { /* 拦截器已提示 */ } finally {
+    importSaving.value = false;
+  }
 }
 
 /* ================= 编辑抽屉 ================= */
@@ -294,6 +357,7 @@ watch(
           <el-button type="primary" @click="search">查询</el-button>
           <el-button @click="reset">重置</el-button>
           <el-button v-perm="'case:write'" type="success" plain @click="blankCase">＋ 新增 UI 用例</el-button>
+          <el-button v-perm="'case:write'" plain @click="openImport">⇪ 批量导入</el-button>
           <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
         </el-form-item>
       </el-form>
@@ -316,8 +380,8 @@ watch(
         </div>
       </div>
 
-      <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
-        <el-table-column type="selection" width="45" reserve-selection />
+      <el-table ref="tableRef" :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="45" fixed="left" reserve-selection />
         <el-table-column prop="case_id" label="用例编号" min-width="150">
           <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
         </el-table-column>
@@ -484,6 +548,42 @@ watch(
       <template #footer>
         <el-button @click="moveVisible = false">取消</el-button>
         <el-button type="primary" :loading="moveSaving" @click="doMove">确认迁移 {{ selected.length }} 条</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 批量导入弹窗：下载模板 → 编辑 JSON → 上传/粘贴 → 预览校验 → 逐条落盘 -->
+    <el-dialog v-model="importVisible" title="批量导入 UI 用例" width="640px">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
+        <template #title>
+          先<a style="margin: 0 4px" @click="downloadTemplate">下载 JSON 模板</a>，按模板改好后上传或粘贴；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。
+        </template>
+      </el-alert>
+      <div style="display: flex; gap: 12px; margin-bottom: 8px">
+        <el-upload :auto-upload="false" :show-file-list="false" accept=".json,application/json" :on-change="onFileChange">
+          <el-button size="small">选择 .json 文件</el-button>
+        </el-upload>
+        <span v-if="importRaw.trim()" style="font-size: 13px; display: flex; align-items: center; gap: 6px">
+          <template v-if="importParsed.ok">
+            <el-tag size="small" type="success">可解析：{{ importParsed.cases.length }} 条</el-tag>
+            <el-link type="info" :underline="false" @click="importRaw = ''">清空重填</el-link>
+          </template>
+          <el-tag v-else size="small" type="danger">{{ importParsed.err }}</el-tag>
+        </span>
+      </div>
+      <el-input v-model="importRaw" type="textarea" :rows="10" class="mono" placeholder="粘贴模板 JSON（含 cases 数组），或用上方文件选择" />
+      <div v-if="importResult" style="margin-top: 10px; font-size: 13px">
+        <el-tag type="success" size="small">成功 {{ importResult.imported }} 条</el-tag>
+        <el-tag v-if="importResult.skipped.length" type="warning" size="small" style="margin-left: 6px">编号重复跳过 {{ importResult.skipped.length }} 条（{{ importResult.skipped.join(", ") }}）</el-tag>
+        <el-tag v-if="importResult.errors.length" type="danger" size="small" style="margin-left: 6px">非法 {{ importResult.errors.length }} 条</el-tag>
+        <ul v-if="importResult.errors.length" style="margin: 6px 0 0; padding-left: 18px; color: #c45656; max-height: 160px; overflow: auto">
+          <li v-for="e in importResult.errors" :key="e" class="mono">{{ e }}</li>
+        </ul>
+      </div>
+      <template #footer>
+        <el-button @click="importVisible = false">关闭</el-button>
+        <el-button type="primary" :loading="importSaving"
+                   :disabled="!importParsed.ok || !importParsed.cases.length"
+                   @click="doImport">导入 {{ importParsed.ok ? importParsed.cases.length : 0 }} 条</el-button>
       </template>
     </el-dialog>
   </div>

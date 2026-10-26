@@ -183,6 +183,15 @@ export const api = {
     http.get<{ excel_variables: string[]; secret_variables: string[] }>(
       "/ui-cases/variables", { params: { file } }).then((r) => r.data),
 
+  /** UI 用例批量导入模板（JSON blob，浏览器侧下载） */
+  downloadUiCaseTemplate: () =>
+    http.get<Blob>("/ui-cases/template", { responseType: "blob" }).then((r) => r.data as Blob),
+
+  /** 批量导入 UI 用例：逐条校验，编号重复跳过，非法逐条报因 */
+  importUiCases: (cases: Record<string, unknown>[], file: string) =>
+    http.post<{ imported: number; imported_ids: string[]; skipped: string[]; errors: string[] }>(
+      "/ui-cases/import", { cases }, { params: { file } }).then((r) => r.data),
+
   createUiCase: (data: Record<string, unknown>, file: string) =>
     http.post<UiCaseItem>("/ui-cases", data, { params: { file } }).then((r) => r.data),
 

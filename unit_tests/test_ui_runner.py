@@ -96,13 +96,16 @@ def test_full_flow_all_actions(base_url):
     ])
     assert result.ok, result.error
     assert all(s["ok"] for s in result.steps)
-    assert len(result.steps) == 14
+    assert len(result.steps) == 15  # 14 步 + 通过用例自动追加的终态截图
     # 变量提取写入池并可在后续引用
     assert ctx.get("who_val") == "qa77"
     assert ctx.get("uname") == "qa77"
     assert ctx.get("sess") == "abc123"
     assert "?logged_in=1" in ctx.get("page_url")
     # screenshot 步骤留了截图名
+    assert result.steps[13]["screenshot"]
+    # 终态截图（五期新增）：最后一步为自动补的 final_shot，携带自己的截图证据
+    assert result.steps[-1]["action"] == "final_shot"
     assert result.steps[-1]["screenshot"]
 
 

@@ -159,12 +159,15 @@ class UiRunner:
         # attempt（三期-B）：第几次尝试（1 起）。仅影响截图命名（>1 时加「第N试」前缀），
         # 保证 retry=0 的存量用例截图名与二期逐字节一致。
         self.attempt = max(1, int(attempt))
+        # 截图名中的用例标识（run() 开头从 case 回填）：不同用例同名步骤截图不再互相覆盖
+        self._case_tag = ""
 
     def _step_cm(self, label: str):
         return self._step(label) if self._step else nullcontext()
 
     def run(self, case: dict) -> UiRunResult:
         result = UiRunResult(case_id=case.get("case_id", ""), ok=False)
+        self._case_tag = str(case.get("case_id") or "")
         browser_name = (case.get("browser") or "chromium").lower()
         headless = bool(case.get("headless", True))
         start = time.perf_counter()
@@ -221,6 +224,15 @@ class UiRunner:
             if not result.ok:
                 bad = next(s for s in result.steps if not s["ok"])
                 result.error = bad.get("error") or f"步骤 {bad['index']}（{bad.get('action')}）失败"
+            elif self.mode == "normal" and page is not None:
+                # 通过的用例补一张终态全屏：报告里每条用例至少有一屏现场可核验执行正确性
+                # （失败用例已有失败截图；采集模式是短任务不补）
+                final_entry = {"index": len(result.steps) + 1, "action": "final_shot",
+                               "action_desc": "终态截图（自动）", "locator": None, "value": "",
+                               "desc": "", "ok": True, "duration_ms": 0,
+                               "error": None, "screenshot": None}
+                self._capture(page, final_entry, "终态")
+                result.steps.append(final_entry)
         except UiRunnerError as e:
             result.error = str(e)
             logger.error("[{}] UI 执行错误: {}", case.get("case_id"), e)
@@ -452,7 +464,8 @@ class UiRunner:
             target = locator if locator is not None else page
             png = target.screenshot(full_page=(locator is None))
             prefix = f"第{self.attempt}试-" if self.attempt > 1 else ""  # retry=0 存量命名不变
-            att_name = f"截图-{prefix}{name_suffix}-{entry.get('index', 0)}.png"
+            tag = f"{self._case_tag}-" if self._case_tag else ""  # 用例隔离：跨用例同序号截图不互盖
+            att_name = f"截图-{tag}{prefix}{name_suffix}-{entry.get('index', 0)}.png"
             saved = False
             if self.output_dir is not None:
                 try:

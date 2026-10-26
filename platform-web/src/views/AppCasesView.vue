@@ -6,7 +6,7 @@
  * 数据全部走 /api/app-cases，载体是 .apjson。本页自包含拉取逻辑，CasesView 在选中 App 项目时整体委托给它。
  * 驱动（Appium）尚未接入：用例可编辑维护、可被执行链路收集，执行阶段统一跳过。
  */
-import { computed, reactive, ref, watch } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
@@ -82,6 +82,10 @@ const pagedCases = computed(() => {
   const start = (currentPage.value - 1) * pageSize.value;
   return sortedCases.value.slice(start, start + pageSize.value);
 });
+
+// 固定列（选择/操作）在数据变化后重算布局，避免翻页热区错位（同 CasesView 实践）
+const tableRef = ref<{ doLayout: () => void } | null>(null);
+watch(pagedCases, () => nextTick(() => tableRef.value?.doLayout()));
 
 function selectModule(m: string) {
   activeModule.value = m;
@@ -314,8 +318,8 @@ watch(
         </div>
       </div>
 
-      <el-table :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
-        <el-table-column type="selection" width="45" reserve-selection />
+      <el-table ref="tableRef" :data="pagedCases" v-loading="loading" row-key="case_id" size="small" @selection-change="onSelectionChange">
+        <el-table-column type="selection" width="45" fixed="left" reserve-selection />
         <el-table-column prop="case_id" label="用例编号" min-width="150">
           <template #default="{ row }"><span class="mono">{{ row.case_id }}</span></template>
         </el-table-column>

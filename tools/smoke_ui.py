@@ -248,8 +248,8 @@ def main():
                                "/api/runs/" + urllib.parse.quote(run_id, safe="") + "/cases/" + urllib.parse.quote(pass_id, safe=""),
                                token=ADMIN_TOK)
             steps = (detail or {}).get("ui_steps") or []
-            check("通过用例详情含 ui_steps 步骤轨迹", code == 200 and len(steps) == 6 and
-                  all(s.get("ok") for s in steps), f"{code} {detail}")
+            check("通过用例详情含 ui_steps 步骤轨迹", code == 200 and len(steps) == 7 and
+                  all(s.get("ok") for s in steps) and steps[-1]["action"] == "final_shot", f"{code} {detail}")
             # 截图：把失败用例迁回源，单独跑一批拿失败截图
             code, resp = req("POST", "/api/ui-cases/" + urllib.parse.quote(fail_id, safe="") + "/move" + qf(pfile2),
                              {"to_file": pfile}, ADMIN_TOK)
