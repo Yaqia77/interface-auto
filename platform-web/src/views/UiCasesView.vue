@@ -11,6 +11,7 @@ import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiImportPreviewResp, UiStep, UiSession } from "../types";
 import UiStepEditor from "../components/UiStepEditor.vue";
+import BatchIoDialog from "../components/BatchIoDialog.vue";
 
 const props = defineProps<{
   file: string;
@@ -180,9 +181,9 @@ function switchMode(m: "excel" | "json") {
   importResult.value = null;
 }
 
-async function downloadTemplate(fmt: "json" | "excel") {
+async function downloadTemplate(fmt: string) {
   try {
-    const blob = await api.downloadUiCaseTemplate(fmt);
+    const blob = await api.downloadUiCaseTemplate(fmt as "json" | "excel");
     const isExcel = fmt === "excel";
     const url = URL.createObjectURL(new Blob([blob], {
       type: isExcel ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json",
@@ -209,13 +210,11 @@ const importParsed = computed<{ ok: boolean; cases: Record<string, unknown>[]; e
   }
 });
 
-// 文件选择：按后缀分流——.xlsx/.xlsm 走 Excel 预览，.json 走 JSON 粘贴框
-async function onFileChange(uploadFile: any) {
-  const rawFile: File | undefined = uploadFile?.raw;
-  if (!rawFile) return;
+// 上传文件分流：按后缀——.xlsx/.xlsm 走 Excel 预览，.json 走 JSON 粘贴框（BatchIoDialog 壳透传原始 File）
+async function onIoFile(rawFile: File) {
   const lower = rawFile.name.toLowerCase();
   if (lower.endsWith(".xlsx") || lower.endsWith(".xlsm")) {
-    importMode.value = "excel";
+    switchMode("excel");
     importResult.value = null;
     excelParsing.value = true;
     excelPreview.value = null;
@@ -225,7 +224,7 @@ async function onFileChange(uploadFile: any) {
       excelParsing.value = false;
     }
   } else if (lower.endsWith(".json")) {
-    importMode.value = "json";
+    switchMode("json");
     rawFile.text().then((t) => { importRaw.value = t; }).catch(() => ElMessage.error("读取文件失败"));
   } else {
     ElMessage.warning("只支持 .xlsx 或 .json 文件");
@@ -615,26 +614,21 @@ watch(
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹窗：Excel 一步一行（新手首选）/ JSON 双通道 -->
-    <el-dialog v-model="importVisible" title="批量导入 UI 用例" width="780px">
-      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px">
-        <el-radio-group v-model="importMode" size="small" @change="(v: any) => switchMode(v)">
-          <el-radio-button value="excel">Excel 表格（推荐）</el-radio-button>
-          <el-radio-button value="json">JSON</el-radio-button>
-        </el-radio-group>
-        <el-button size="small" text type="primary" @click="downloadTemplate('excel')">⬇ 下载 Excel 模板</el-button>
-        <el-button size="small" text type="primary" @click="downloadTemplate('json')">⬇ 下载 JSON 模板</el-button>
-        <el-upload :auto-upload="false" :show-file-list="false" accept=".xlsx,.xlsm,.json,application/json" :on-change="onFileChange" style="margin-left:auto">
-          <el-button size="small" type="primary" plain>选择文件上传</el-button>
-        </el-upload>
-      </div>
-
-      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 12px">
-        <template #title>
-          Excel：一步一行、同编号连续行属同一用例，动作可填中文（打开/点击/输入…）；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。
-        </template>
-      </el-alert>
-
+    <!-- 批量导入弹窗：Excel 一步一行（新手首选）/ JSON 双通道——布局复用 BatchIoDialog 共享壳 -->
+    <BatchIoDialog
+      :visible="importVisible"
+      :mode="importMode"
+      title="批量导入 UI 用例"
+      :channels="[{ key: 'excel', label: 'Excel 表格（推荐）' }, { key: 'json', label: 'JSON' }]"
+      :actions="[{ key: 'excel', label: '⬇ 下载 Excel 模板' }, { key: 'json', label: '⬇ 下载 JSON 模板' }]"
+      accept=".xlsx,.xlsm,.json,application/json"
+      :busy="excelParsing"
+      alert-text="Excel：一步一行、同编号连续行属同一用例，动作可填中文（打开/点击/输入…）；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。"
+      @update:visible="(v: boolean) => (importVisible = v)"
+      @update:mode="(v: string) => switchMode(v as 'excel' | 'json')"
+      @action="downloadTemplate"
+      @file="onIoFile"
+    >
       <!-- Excel 预览表 -->
       <div v-if="importMode === 'excel'" v-loading="excelParsing">
         <el-empty v-if="!excelPreview && !excelParsing" description="下载模板填写后，点「选择文件上传」解析预览" :image-size="60" />
@@ -683,16 +677,17 @@ watch(
         <el-input v-model="importRaw" type="textarea" :rows="10" class="mono" placeholder="粘贴模板 JSON（含 cases 数组），或用上方文件选择" />
       </div>
 
-      <div v-if="importResult" style="margin-top: 10px; font-size: 13px">
-        <el-tag type="success" size="small">成功 {{ importResult.imported }} 条</el-tag>
-        <el-tag v-if="importResult.skipped.length" type="warning" size="small" style="margin-left: 6px">编号重复跳过 {{ importResult.skipped.length }} 条（{{ importResult.skipped.join(", ") }}）</el-tag>
-        <el-tag v-if="importResult.errors.length" type="danger" size="small" style="margin-left: 6px">非法 {{ importResult.errors.length }} 条</el-tag>
-        <ul v-if="importResult.errors.length" style="margin: 6px 0 0; padding-left: 18px; color: #c45656; max-height: 160px; overflow: auto">
-          <li v-for="e in importResult.errors" :key="e" class="mono">{{ e }}</li>
-        </ul>
-      </div>
+      <template #result>
+        <div v-if="importResult" style="margin-top: 10px; font-size: 13px">
+          <el-tag type="success" size="small">成功 {{ importResult.imported }} 条</el-tag>
+          <el-tag v-if="importResult.skipped.length" type="warning" size="small" style="margin-left: 6px">编号重复跳过 {{ importResult.skipped.length }} 条（{{ importResult.skipped.join(", ") }}）</el-tag>
+          <el-tag v-if="importResult.errors.length" type="danger" size="small" style="margin-left: 6px">非法 {{ importResult.errors.length }} 条</el-tag>
+          <ul v-if="importResult.errors.length" style="margin: 6px 0 0; padding-left: 18px; color: #c45656; max-height: 160px; overflow: auto">
+            <li v-for="e in importResult.errors" :key="e" class="mono">{{ e }}</li>
+          </ul>
+        </div>
+      </template>
       <template #footer>
-        <el-button @click="importVisible = false">关闭</el-button>
         <el-button v-if="importMode === 'excel'" type="primary" :loading="importSaving"
                    :disabled="!excelImportable.length"
                    @click="doImport">导入 {{ excelImportable.length }} 条</el-button>
@@ -700,7 +695,7 @@ watch(
                    :disabled="!importParsed.ok || !importParsed.cases.length"
                    @click="doImport">导入 {{ importParsed.ok ? importParsed.cases.length : 0 }} 条</el-button>
       </template>
-    </el-dialog>
+    </BatchIoDialog>
   </div>
 </template>
 

@@ -4,8 +4,10 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
+import { hasPerm } from "../stores/auth";
 import type { ApiDefItem, CaseHistoryResp, CaseItem, CaseMeta, ImportPreviewItem, ImportPreviewResp, Project, ScriptItem } from "../types";
 import JsonViewer from "../components/JsonViewer.vue";
+import BatchIoDialog from "../components/BatchIoDialog.vue";
 import UiCasesView from "./UiCasesView.vue";
 import AppCasesView from "./AppCasesView.vue";
 
@@ -468,8 +470,39 @@ function clearSelection() {
 // 需 nextTick 后调 doLayout() 让表格重算列布局。watch pagedCases 一并覆盖翻页与筛选两种触发路径。
 watch(pagedCases, () => nextTick(() => tableRef.value?.doLayout?.()));
 
-/* ================= 导入导出 ================= */
-const importInput = ref<HTMLInputElement>();
+/* ================= 批量导入导出（复用 UI 页的 BatchIoDialog 布局壳：智能导入预览确认 / 直接导入双通道） ================= */
+const ioVisible = ref(false);
+const ioMode = ref<"smart" | "direct">("smart");
+const ioWritable = computed(() => hasPerm("case:write"));
+const IO_CHANNELS = [
+  { key: "smart", label: "Excel 智能导入（推荐）" },
+  { key: "direct", label: "Excel 直接导入" },
+];
+const IO_ACTIONS = [
+  { key: "template", label: "⬇ 下载 Excel 模板" },
+  { key: "export", label: "⬆ 导出项目用例" },
+];
+// 直接导入的结果（弹窗内展示；智能导入的结果在预览表里）
+const directResult = ref<{ imported: number; skipped: number; errors: string[] } | null>(null);
+
+function openBatchIo() {
+  ioMode.value = "smart";
+  smartData.value = null;
+  smartSelected.value = [];
+  directResult.value = null;
+  ioVisible.value = true;
+}
+
+function onIoAction(key: string) {
+  if (key === "template") doDownloadTemplate();
+  else if (key === "export") doExport();
+}
+
+// 上传文件分流：智能导入走预览确认流，直接导入即传即导
+async function onIoFile(raw: File) {
+  if (ioMode.value === "smart") await runSmartPreview(raw);
+  else await runDirectImport(raw);
+}
 
 async function doExport() {
   try {
@@ -489,18 +522,12 @@ async function doExport() {
   } catch { /* 拦截器已提示 */ }
 }
 
-function triggerImport() {
-  importInput.value?.click();
-}
-
-async function onFileSelected(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  input.value = "";
+async function runDirectImport(file: File) {
+  directResult.value = null;
   try {
     const result = await api.importCases(file, currentFile.value);
     const { imported, skipped, errors } = result;
+    directResult.value = { imported, skipped, errors };
     if (errors.length) {
       ElMessage.warning(`导入 ${imported} 条，跳过 ${skipped} 条已有，${errors.length} 条格式异常`);
     } else {
@@ -530,9 +557,7 @@ async function doDownloadTemplate() {
   } catch { /* 拦截器已提示 */ }
 }
 
-/* ---------- 智能导入（预览确认流：上传 → 转换报告 → 勾选确认 → 落盘） ---------- */
-const smartInput = ref<HTMLInputElement>();
-const smartVisible = ref(false);
+/* ---------- 智能导入（预览确认流：上传 → 转换报告 → 勾选确认 → 落盘），在 BatchIoDialog 智能通道内渲染 ---------- */
 const smartLoading = ref(false);
 const smartSaving = ref(false);
 const smartData = ref<ImportPreviewResp | null>(null);
@@ -548,17 +573,8 @@ const FIELD_LABEL: Record<string, string> = {
   expected: "预期结果·参与转换",
 };
 
-function triggerSmartImport() {
-  smartInput.value?.click();
-}
-
-async function onSmartFile(e: Event) {
-  const input = e.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) return;
-  input.value = "";
+async function runSmartPreview(file: File) {
   smartLoading.value = true;
-  smartVisible.value = true;
   smartData.value = null;
   smartSelected.value = [];
   try {
@@ -569,9 +585,7 @@ async function onSmartFile(e: Event) {
     for (const it of resp.items) {
       if (it.importable && !it.exists) smartTableRef.value?.toggleRowSelection(it, true);
     }
-  } catch {
-    smartVisible.value = false;
-  } finally {
+  } catch { /* 拦截器已提示，留在弹窗内可重试 */ } finally {
     smartLoading.value = false;
   }
 }
@@ -599,7 +613,7 @@ async function doSmartImport() {
     } else {
       ElMessage.success(`导入 ${imported} 条，跳过 ${skipped} 条已有`);
     }
-    smartVisible.value = false;
+    ioVisible.value = false;
     await search();
     meta.value = await api.getCaseMeta(currentFile.value);
     loadProjects();
@@ -1080,12 +1094,7 @@ onMounted(async () => {
             <el-button @click="reset">重置</el-button>
             <el-button v-perm="'case:write'" type="success" plain @click="openCreate">＋ 新增用例</el-button>
             <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
-            <el-button plain @click="doExport">⬇ 导出</el-button>
-            <el-button plain @click="doDownloadTemplate">📄 模板</el-button>
-            <el-button v-perm="'case:write'" plain @click="triggerImport">⬆ 导入</el-button>
-            <el-button v-perm="'case:write'" plain @click="triggerSmartImport">✨ 智能导入</el-button>
-            <input ref="importInput" type="file" accept=".xlsx" style="display:none" @change="onFileSelected" />
-            <input ref="smartInput" type="file" accept=".xlsx" style="display:none" @change="onSmartFile" />
+            <el-button plain @click="openBatchIo">⇪ 批量导入导出</el-button>
           </el-form-item>
         </el-form>
       </el-card>
@@ -1417,65 +1426,96 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <!-- 智能导入预览对话框 -->
-    <el-dialog v-model="smartVisible" title="智能导入预览" width="1040px" :close-on-click-modal="false">
+    <!-- 批量导入导出弹窗：复用 UI 页的 BatchIoDialog 布局壳（智能导入预览确认 / 直接导入） -->
+    <BatchIoDialog
+      :visible="ioVisible"
+      :mode="ioMode"
+      title="批量导入导出接口用例"
+      :channels="IO_CHANNELS"
+      :actions="IO_ACTIONS"
+      :writable="ioWritable"
+      :busy="smartLoading"
+      width="1040px"
+      alert-text="Excel：下载模板填写后上传——智能导入先预览转换标注再勾选确认（只写入勾选行），直接导入即传即导；用例编号已存在自动跳过。"
+      @update:visible="(v: boolean) => (ioVisible = v)"
+      @update:mode="(v: string) => (ioMode = v as 'smart' | 'direct')"
+      @action="onIoAction"
+      @file="onIoFile"
+    >
       <div v-loading="smartLoading">
-        <template v-if="smartData">
-          <el-alert type="info" :closable="false" show-icon style="margin-bottom: 10px">
-            <template #default>
-              <div style="font-size: 12px">
-                工作表「{{ smartData.sheet }}」解析 {{ smartData.items.length }} 行 ·
-                {{ smartData.format === 'standard' ? '标准格式' : '非标准表头，已自动映射转换' }}。
-                <b>黄色</b>=已自动补全/猜测（默认值、兜底断言），请核对；<b>红色</b>=无法导入。
-                确认无误后点「确认导入」，只写入勾选行。
-              </div>
-            </template>
-          </el-alert>
-          <div class="smart-cols">
-            <el-tag v-for="cm in smartData.column_map" :key="cm.header" size="small" effect="plain">
-              {{ cm.header }} → {{ FIELD_LABEL[cm.field] ?? cm.field }}
-            </el-tag>
-            <el-tag v-for="h in smartData.unmapped_headers" :key="h" size="small" type="info" effect="plain">
-              {{ h }}（已忽略）
-            </el-tag>
-          </div>
-          <el-table ref="smartTableRef" :data="smartData.items" size="small" max-height="440"
-                    row-key="row" :row-class-name="smartRowClass" style="margin-top: 8px"
-                    @selection-change="(rows: ImportPreviewItem[]) => (smartSelected = rows)">
-            <el-table-column type="selection" width="42" fixed="left" :selectable="smartSelectable" reserve-selection />
-            <el-table-column label="编号" width="120">
-              <template #default="{ row }"><span class="mono">{{ row.case.case_id }}</span></template>
-            </el-table-column>
-            <el-table-column label="描述" min-width="120" show-overflow-tooltip>
-              <template #default="{ row }">{{ row.case.case_desc }}</template>
-            </el-table-column>
-            <el-table-column label="方法" width="66">
-              <template #default="{ row }">{{ row.case.method }}</template>
-            </el-table-column>
-            <el-table-column label="请求路径" min-width="170" show-overflow-tooltip>
-              <template #default="{ row }"><span class="mono">{{ row.case.url }}</span></template>
-            </el-table-column>
-            <el-table-column label="断言" min-width="150" show-overflow-tooltip>
-              <template #default="{ row }"><span class="mono dim">{{ JSON.stringify(row.case.asserts ?? []) }}</span></template>
-            </el-table-column>
-            <el-table-column label="转换标注" min-width="230">
-              <template #default="{ row }">
-                <div v-for="(m, i) in row.marks" :key="i" class="smart-mark" :class="'mk-' + m.level">
-                  {{ m.level === 'error' ? '✖' : m.level === 'warn' ? '⚠' : 'ℹ' }} {{ m.msg }}
-                </div>
-                <div v-if="row.exists" class="smart-mark mk-warn">⚠ 编号已存在于目标文件，将自动跳过</div>
-                <span v-if="!row.marks.length && !row.exists" class="smart-mark mk-ok">✔ 完整识别</span>
-              </template>
-            </el-table-column>
-          </el-table>
+        <!-- 智能导入：预览表（默认勾选可导入且不冲突的行） -->
+        <template v-if="ioMode === 'smart'">
+          <el-empty v-if="!smartData && !smartLoading" description="下载模板填写后，点「选择文件上传」解析预览" :image-size="60" />
+          <template v-if="smartData">
+            <div style="margin-bottom: 8px; font-size: 12px; color: #606266">
+              工作表「{{ smartData.sheet }}」解析 {{ smartData.items.length }} 行 ·
+              {{ smartData.format === 'standard' ? '标准格式' : '非标准表头，已自动映射转换' }}。
+              <b>黄色</b>=已自动补全/猜测（默认值、兜底断言），请核对；<b>红色</b>=无法导入。
+            </div>
+            <div class="smart-cols">
+              <el-tag v-for="cm in smartData.column_map" :key="cm.header" size="small" effect="plain">
+                {{ cm.header }} → {{ FIELD_LABEL[cm.field] ?? cm.field }}
+              </el-tag>
+              <el-tag v-for="h in smartData.unmapped_headers" :key="h" size="small" type="info" effect="plain">
+                {{ h }}（已忽略）
+              </el-tag>
+            </div>
+            <el-table ref="smartTableRef" :data="smartData.items" size="small" max-height="440"
+                      row-key="row" :row-class-name="smartRowClass" style="margin-top: 8px"
+                      @selection-change="(rows: ImportPreviewItem[]) => (smartSelected = rows)">
+              <el-table-column type="selection" width="42" fixed="left" :selectable="smartSelectable" reserve-selection />
+              <el-table-column label="编号" width="120">
+                <template #default="{ row }"><span class="mono">{{ row.case.case_id }}</span></template>
+              </el-table-column>
+              <el-table-column label="描述" min-width="120" show-overflow-tooltip>
+                <template #default="{ row }">{{ row.case.case_desc }}</template>
+              </el-table-column>
+              <el-table-column label="方法" width="66">
+                <template #default="{ row }">{{ row.case.method }}</template>
+              </el-table-column>
+              <el-table-column label="请求路径" min-width="170" show-overflow-tooltip>
+                <template #default="{ row }"><span class="mono">{{ row.case.url }}</span></template>
+              </el-table-column>
+              <el-table-column label="断言" min-width="150" show-overflow-tooltip>
+                <template #default="{ row }"><span class="mono dim">{{ JSON.stringify(row.case.asserts ?? []) }}</span></template>
+              </el-table-column>
+              <el-table-column label="转换标注" min-width="230">
+                <template #default="{ row }">
+                  <div v-for="(m, i) in row.marks" :key="i" class="smart-mark" :class="'mk-' + m.level">
+                    {{ m.level === 'error' ? '✖' : m.level === 'warn' ? '⚠' : 'ℹ' }} {{ m.msg }}
+                  </div>
+                  <div v-if="row.exists" class="smart-mark mk-warn">⚠ 编号已存在于目标文件，将自动跳过</div>
+                  <span v-if="!row.marks.length && !row.exists" class="smart-mark mk-ok">✔ 完整识别</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </template>
+        </template>
+        <!-- 直接导入：即传即导，结果落下方结果区 -->
+        <template v-else>
+          <el-empty v-if="!directResult && !smartLoading"
+                    description="点「选择文件上传」即传即导：按用例编号追加，已存在自动跳过，格式异常逐条报因" :image-size="60" />
         </template>
       </div>
-      <template #footer>
-        <span style="float: left; color: #909399; font-size: 12px; line-height: 32px">已选 {{ smartSelected.length }} 条</span>
-        <el-button @click="smartVisible = false">取消</el-button>
-        <el-button type="primary" :loading="smartSaving" :disabled="!smartSelected.length" @click="doSmartImport">确认导入</el-button>
+    
+      <template #result>
+        <div v-if="directResult" style="margin-top: 4px; font-size: 13px">
+          <el-tag type="success" size="small">成功 {{ directResult.imported }} 条</el-tag>
+          <el-tag type="warning" size="small" style="margin-left: 6px">跳过已有 {{ directResult.skipped }} 条</el-tag>
+          <el-tag v-if="directResult.errors.length" type="danger" size="small" style="margin-left: 6px">格式异常 {{ directResult.errors.length }} 条</el-tag>
+          <ul v-if="directResult.errors.length" style="margin: 6px 0 0; padding-left: 18px; color: #c45656; max-height: 160px; overflow: auto">
+            <li v-for="e in directResult.errors" :key="e" class="mono">{{ e }}</li>
+          </ul>
+        </div>
       </template>
-    </el-dialog>
+      <template #footer-info>
+        <template v-if="ioMode === 'smart' && smartData">已选 {{ smartSelected.length }} 条</template>
+      </template>
+      <template #footer>
+        <el-button v-if="ioMode === 'smart'" type="primary" :loading="smartSaving"
+                   :disabled="!smartSelected.length" @click="doSmartImport">确认导入 {{ smartSelected.length }} 条</el-button>
+      </template>
+    </BatchIoDialog>
 
     <!-- 项目新建 / 重命名弹窗（后端自动脚手架空用例文件，重名 409） -->
     <el-dialog v-model="projDlgVisible" :title="projEditingId ? '编辑项目' : '新建用例项目'" width="440px">
