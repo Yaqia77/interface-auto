@@ -152,6 +152,33 @@ def download_template(fmt: str = Query("json", alias="format", pattern="^(json|e
                     headers={"Content-Disposition": 'attachment; filename="ui_cases_template.json"'})
 
 
+@router.get("/export", summary="导出项目 UI 用例（format=excel|json，与导入同构可回导，按筛选条件）")
+def export_cases(
+    file: str = Query(..., description="UI 项目的用例 JSON 路径（相对项目根）"),
+    fmt: str = Query("excel", alias="format", pattern="^(excel|json)$"),
+    module: str | None = Query(default=None, description="模块名，包含匹配"),
+    priority: str | None = Query(default=None, description="优先级，逗号分隔"),
+    keyword: str | None = Query(default=None, description="编号/名称/描述 关键字"),
+    run: bool | None = Query(default=None, description="是否启用"),
+):
+    """导出当前筛选命中的全部用例（不传条件即全量）；编辑后可直接回导，同编号按重复跳过。
+
+    excel=「一步一行」xlsx（同模板结构）；json={"cases":[...]}（与 /import 接收结构同构，无损）。
+    """
+    path = _resolve_file(file)
+    try:
+        cases = ui_case_store.list_cases(path, module, priority, keyword, run)
+    except UiCaseError as e:
+        _raise(e)
+    if fmt == "json":
+        content = json.dumps({"cases": cases}, ensure_ascii=False, indent=2).encode("utf-8")
+        return Response(content=content, media_type="application/json",
+                        headers={"Content-Disposition": 'attachment; filename="ui_cases_export.json"'})
+    return Response(content=ui_excel.build_export_bytes(cases),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="ui_cases_export.xlsx"'})
+
+
 @router.post("/import", summary="批量导入 UI 用例（逐条校验；编号重复跳过，非法逐条报因）")
 def import_cases(body: UiImportReq,
                  file: str = Query(..., description="UI 项目的用例 JSON 路径（相对项目根）"),

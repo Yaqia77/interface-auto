@@ -232,3 +232,41 @@ def test_parsed_case_passes_validate_and_persists(tmp_path):
     created = store.create_case(jsonf, case)
     assert created["case_id"] == "rt_001"
     assert [s["action"] for s in created["steps"]] == ["goto", "fill"]
+
+
+# ==================== 导出 → 回导 roundtrip ====================
+
+def test_export_roundtrip_reimportable(tmp_path):
+    """项目用例 → 导出 Excel → 再解析：条数/步骤/布尔/重试/变量提取一致（可直接回导）。"""
+    raw = [
+        {"case_id": "exp_001", "name": "登录", "module": "登录", "priority": "P1",
+         "run": True, "browser": "chromium", "headless": False, "retry": 2,
+         "steps": [{"action": "goto", "value": "/login"},
+                   {"action": "fill", "locator": "#u", "value": "qa"},
+                   {"action": "expect_text", "locator": ".w", "value": "欢迎"}],
+         "extract": [{"var": "tok", "source": "cookie:token"}]},
+        {"case_id": "exp_002", "name": "搜索", "module": "搜索", "priority": "P2",
+         "steps": [{"action": "goto", "value": "/search"}]},
+    ]
+    cases = [store.validate_case(c) for c in raw]
+    b = ui_excel.build_export_bytes(cases)
+    assert b[:2] == b"PK"  # xlsx 魔数
+    r = ui_excel.parse_workbook(_bytes_to_path(b), existing_ids=set())
+    assert r["total"] == 2
+    by = {i["case_id"]: i for i in r["items"]}
+    c1 = by["exp_001"]["case"]
+    assert by["exp_001"]["steps_count"] == 3
+    assert by["exp_001"]["importable"] is True
+    assert c1["headless"] is False and c1["run"] is True and c1["retry"] == 2
+    assert [s["action"] for s in c1["steps"]] == ["goto", "fill", "expect_text"]
+    assert c1["extract"] == [{"var": "tok", "source": "cookie:token"}]
+    assert by["exp_002"]["case"]["headless"] is True  # 未填默认是
+
+
+def test_export_ids_conflict_with_existing(tmp_path):
+    """导出件回导同项目时 exists 标注生效（同编号按重复跳过，不会双写）。"""
+    raw = {"case_id": "cf_001", "name": "查重", "module": "M",
+           "steps": [{"action": "goto", "value": "/a"}]}
+    b = ui_excel.build_export_bytes([store.validate_case(raw)])
+    r = ui_excel.parse_workbook(_bytes_to_path(b), existing_ids={"cf_001"})
+    assert r["items"][0]["exists"] is True

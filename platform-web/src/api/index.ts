@@ -187,6 +187,12 @@ export const api = {
   downloadUiCaseTemplate: (fmt: "json" | "excel" = "json") =>
     http.get<Blob>("/ui-cases/template", { params: { format: fmt }, responseType: "blob" }).then((r) => r.data as Blob),
 
+  /** 导出项目 UI 用例（blob 下载）：excel=一步一行可回导，json=与导入同构无损；支持当前筛选条件 */
+  exportUiCases: (file: string, fmt: "excel" | "json" = "excel", filters?: {
+    module?: string; priority?: string; keyword?: string; run?: boolean;
+  }) => http.get<Blob>("/ui-cases/export",
+    { params: { file, format: fmt, ...filters }, responseType: "blob" }).then((r) => r.data as Blob),
+
   /** 上传 UI 步骤 Excel 解析预览（不落盘）：返回逐条 case/marks/importable */
   previewUiExcel: (file: File, project: string) => {
     const fd = new FormData();

@@ -9,6 +9,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
+import { hasPerm } from "../stores/auth";
 import type { Project, UiCaseItem, UiCaseMeta, UiExtract, UiImportPreviewResp, UiStep, UiSession } from "../types";
 import UiStepEditor from "../components/UiStepEditor.vue";
 import BatchIoDialog from "../components/BatchIoDialog.vue";
@@ -149,10 +150,17 @@ async function doMove() {
   emit("projects-changed");
 }
 
-/* ================= 批量导入（Excel 一步一行 / JSON 双通道） ================= */
+/* ================= 批量导入导出（Excel 一步一行 / JSON 双通道 + 按通道导出） ================= */
 const importVisible = ref(false);
 const importMode = ref<"excel" | "json">("excel");
 const importSaving = ref(false);
+const ioWritable = computed(() => hasPerm("case:write"));
+// 提示条按通道切换，避免 JSON 通道展示 Excel 专属说明
+const ioAlertText = computed(() => importMode.value === "excel"
+  ? "Excel：一步一行、同编号连续行属同一用例，动作可填中文（打开/点击/输入…）；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。"
+  : "JSON：粘贴模板 JSON（含 cases 数组）或上传 .json，逐条校验后落库；编号重复自动跳过，非法逐条报因，单次上限 64 条。");
+// 导出说明两通道通用，附在尾部
+const ioAlertFull = computed(() => ioAlertText.value + "「⬆ 导出项目用例」按当前通道格式与筛选条件导出，编辑后可直接回导。");
 const importResult = ref<{ imported: number; imported_ids: string[]; skipped: string[]; errors: string[] } | null>(null);
 
 // JSON 通道
@@ -193,6 +201,36 @@ async function downloadTemplate(fmt: string) {
     a.download = isExcel ? "ui_cases_template.xlsx" : "ui_cases_template.json";
     a.click();
     URL.revokeObjectURL(url);
+  } catch { /* 拦截器已提示 */ }
+}
+
+// 弹窗内文字动作：模板下载（excel/json）或导出项目用例
+function onIoAction(key: string) {
+  if (key === "export") doExport();
+  else downloadTemplate(key);
+}
+
+// 导出项目用例：按当前通道格式（Excel 通道→一步一行 xlsx，JSON 通道→同构 json），带当前筛选条件
+async function doExport() {
+  try {
+    const fmt = importMode.value;
+    const blob = await api.exportUiCases(props.file, fmt, {
+      module: activeModule.value || undefined,
+      priority: filters.priority.length ? filters.priority.join(",") : undefined,
+      keyword: filters.keyword.trim() || undefined,
+      run: filters.onlyEnabled ? true : undefined,
+    });
+    const url = URL.createObjectURL(new Blob([blob], {
+      type: fmt === "excel" ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "application/json",
+    }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fmt === "excel" ? "ui_cases_export.xlsx" : "ui_cases_export.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    ElMessage.success(fmt === "excel"
+      ? "已按当前筛选导出 Excel（一步一行，编辑后可直接回导）"
+      : "已按当前筛选导出 JSON（与导入结构同构，无损可回导）");
   } catch { /* 拦截器已提示 */ }
 }
 
@@ -420,7 +458,7 @@ watch(
           <el-button type="primary" @click="search">查询</el-button>
           <el-button @click="reset">重置</el-button>
           <el-button v-perm="'case:write'" type="success" plain @click="blankCase">＋ 新增 UI 用例</el-button>
-          <el-button v-perm="'case:write'" plain @click="openImport">⇪ 批量导入</el-button>
+          <el-button plain @click="openImport">⇪ 批量导入导出</el-button>
           <el-button v-perm="'run:create'" type="warning" plain @click="goExecute">▶ 按当前条件执行</el-button>
         </el-form-item>
       </el-form>
@@ -614,19 +652,20 @@ watch(
       </template>
     </el-dialog>
 
-    <!-- 批量导入弹窗：Excel 一步一行（新手首选）/ JSON 双通道——布局复用 BatchIoDialog 共享壳 -->
+    <!-- 批量导入导出弹窗：Excel 一步一行（新手首选）/ JSON 双通道 + 按通道导出——布局复用 BatchIoDialog 共享壳 -->
     <BatchIoDialog
       :visible="importVisible"
       :mode="importMode"
-      title="批量导入 UI 用例"
+      title="批量导入导出 UI 用例"
       :channels="[{ key: 'excel', label: 'Excel 表格（推荐）' }, { key: 'json', label: 'JSON' }]"
-      :actions="[{ key: 'excel', label: '⬇ 下载 Excel 模板' }, { key: 'json', label: '⬇ 下载 JSON 模板' }]"
+      :actions="[{ key: 'excel', label: '⬇ 下载 Excel 模板' }, { key: 'json', label: '⬇ 下载 JSON 模板' }, { key: 'export', label: '⬆ 导出项目用例' }]"
       accept=".xlsx,.xlsm,.json,application/json"
       :busy="excelParsing"
-      alert-text="Excel：一步一行、同编号连续行属同一用例，动作可填中文（打开/点击/输入…）；编号重复自动跳过，字段非法逐条报因、不阻断其他条，单次上限 64 条。"
+      :writable="ioWritable"
+      :alert-text="ioAlertFull"
       @update:visible="(v: boolean) => (importVisible = v)"
       @update:mode="(v: string) => switchMode(v as 'excel' | 'json')"
-      @action="downloadTemplate"
+      @action="onIoAction"
       @file="onIoFile"
     >
       <!-- Excel 预览表 -->
@@ -688,12 +727,14 @@ watch(
         </div>
       </template>
       <template #footer>
-        <el-button v-if="importMode === 'excel'" type="primary" :loading="importSaving"
-                   :disabled="!excelImportable.length"
-                   @click="doImport">导入 {{ excelImportable.length }} 条</el-button>
-        <el-button v-else type="primary" :loading="importSaving"
-                   :disabled="!importParsed.ok || !importParsed.cases.length"
-                   @click="doImport">导入 {{ importParsed.ok ? importParsed.cases.length : 0 }} 条</el-button>
+        <template v-if="ioWritable">
+          <el-button v-if="importMode === 'excel'" type="primary" :loading="importSaving"
+                     :disabled="!excelImportable.length"
+                     @click="doImport">导入 {{ excelImportable.length }} 条</el-button>
+          <el-button v-else type="primary" :loading="importSaving"
+                     :disabled="!importParsed.ok || !importParsed.cases.length"
+                     @click="doImport">导入 {{ importParsed.ok ? importParsed.cases.length : 0 }} 条</el-button>
+        </template>
       </template>
     </BatchIoDialog>
   </div>

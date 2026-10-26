@@ -1,12 +1,13 @@
 # -*- coding: utf-8 -*-
 """UI 用例 Excel 一步一行「下载模板 → 填例 → 预览 → 导入」端到端冒烟。
 
-覆盖低门槛录入方案一（Excel 批量导入）的接口链路，不依赖浏览器（纯数据链路）：
+覆盖低门槛录入方案一（Excel 批量导入）与导出回导闭环的接口链路，不依赖浏览器（纯数据链路）：
 1. /template?format=excel 下载 .xlsx 模板（zip 魔数 PK）；
 2. 程序化在模板里填一条真实用例（中文动作：打开/输入/点击/断言文本），删掉示例行；
 3. /preview 上传解析：一步一行按编号分组为 1 用例、动作归一为英文键、importable=true；
 4. /import 提交预览产出的 cases：落库后可从 /api/ui-cases 列表回读，动作已规范；
-5. 重复导入同编号 → skipped（查重）；示例行编号前缀不污染真实数据。
+5. 重复导入同编号 → skipped（查重）；示例行编号前缀不污染真实数据；
+6. /export?format=excel|json 导出：Excel 与模板同构可回导（exists 查重生效），JSON 与 /import 同构无损。
 
 用法（后端需带 playwright 的 venv 启动，本冒烟只用数据链路不驱动浏览器）：
     .venv\Scripts\python.exe -m uvicorn backend.main:app --port 8000
@@ -189,6 +190,32 @@ def main():
         code, imp2 = req("POST", "/api/ui-cases/import" + qf(file=pfile), {"cases": cases}, tok)
         check("重复导入被跳过（skipped）", code == 200 and want in (imp2.get("skipped") or [])
               and imp2.get("imported") == 0, f"{code} {imp2}")
+
+        # 6.1) 导出 Excel：同模板结构可回导，回导同项目时 exists 查重生效
+        ecode, eraw = get_bytes("/api/ui-cases/export" + qf(file=pfile, format="excel"), tok)
+        check("导出 Excel 200 + xlsx 魔数(PK)", ecode == 200 and eraw[:2] == b"PK", ecode)
+        pcode2, prev2 = post_multipart("/api/ui-cases/preview" + qf(project=pfile),
+                                       "file", "export.xlsx", eraw, tok)
+        eitems = prev2.get("items") or []
+        check("导出件再预览：命中刚才导入的用例且 exists=true（回导会跳过）",
+              pcode2 == 200 and any(i.get("case_id") == want and i.get("exists") for i in eitems),
+              f"{pcode2} {[(i.get('case_id'), i.get('exists')) for i in eitems]}")
+
+        # 6.2) 导出 JSON：{cases:[...]} 与导入同构，含目标用例且步骤完整（无损）
+        jcode, jraw = get_bytes("/api/ui-cases/export" + qf(file=pfile, format="json"), tok)
+        jok = jcode == 200
+        jc = {}
+        if jok:
+            try:
+                jc = next((c for c in json.loads(jraw).get("cases") or []
+                           if c.get("case_id") == want), {})
+            except json.JSONDecodeError:
+                jok = False
+        check("导出 JSON 200 且含该用例（同构可回导）",
+              jok and bool(jc), jcode)
+        check("导出 JSON 步骤动作已规范、条数一致",
+              [s.get("action") for s in (jc.get("steps") or [])]
+              == ["goto", "fill", "click", "expect_text"], jc.get("steps"))
 
         # 7) 预览对空/非法文件的容错（示例-only 模板应解析 0 条）
         tpl_code, tpl_raw = get_bytes("/api/ui-cases/template?format=excel", tok)

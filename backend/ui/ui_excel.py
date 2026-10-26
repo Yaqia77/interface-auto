@@ -156,6 +156,78 @@ def build_template_bytes() -> bytes:
     return buf.getvalue()
 
 
+# ==================== 导出（与模板同构，可回导） ====================
+
+def build_export_workbook(cases: list[dict]) -> Workbook:
+    """把项目用例导出为「一步一行」Excel：与模板列结构同构，编辑后可直接回导（同编号按重复跳过）。
+
+    用例级字段只写首行（与填写口径一致）；无头/是否执行用 是/否（导入侧 normalize_bool 归一）；
+    用例级 desc 与 session 等列模板未承载，导出不丢数据的路径走 JSON 导出。
+    """
+    wb = Workbook()
+    header_fill = PatternFill("solid", fgColor="4472C4")
+    header_font = Font(bold=True, color="FFFFFF")
+    wrap = Alignment(vertical="center", wrap_text=True)
+
+    ws = wb.active
+    ws.title = STEP_SHEET
+    for col, header in enumerate(STEP_HEADERS, start=1):
+        c = ws.cell(row=1, column=col, value=header)
+        c.fill = header_fill
+        c.font = header_font
+        c.alignment = Alignment(horizontal="center", vertical="center")
+
+    row_no = 2
+    for case in cases:
+        steps = case.get("steps") or [{}]  # 兜底：无步骤用例至少保留 meta 行（正常不会发生，validate 强制≥1 步）
+        for i, s in enumerate(steps, start=1):
+            first = i == 1
+            row = [
+                case.get("case_id", "") if first else "",
+                case.get("name", "") if first else "",
+                case.get("module", "") if first else "",
+                case.get("priority", "") if first else "",
+                case.get("browser", "") if first else "",
+                ("是" if case.get("headless", True) else "否") if first else "",
+                ("是" if case.get("run", True) else "否") if first else "",
+                case.get("retry", 0) if first else "",
+                str(i),
+                s.get("action", ""),
+                s.get("locator", ""),
+                s.get("value", ""),
+                s.get("desc", ""),
+            ]
+            for col, value in enumerate(row, start=1):
+                ws.cell(row=row_no, column=col, value=value).alignment = wrap
+            row_no += 1
+
+    widths = [18, 22, 12, 8, 12, 8, 9, 6, 7, 12, 24, 20, 22]
+    for i, w in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A2"
+
+    ws2 = wb.create_sheet(EXTRACT_SHEET)
+    for col, header in enumerate(EXTRACT_HEADERS, start=1):
+        c = ws2.cell(row=1, column=col, value=header)
+        c.fill = header_fill
+        c.font = header_font
+    for case in cases:
+        for e in case.get("extract") or []:
+            ws2.append([case.get("case_id", ""), e.get("var", ""), e.get("source", "")])
+    ws2.column_dimensions["A"].width = 20
+    ws2.column_dimensions["B"].width = 18
+    ws2.column_dimensions["C"].width = 32
+    ws2.freeze_panes = "A2"
+    return wb
+
+
+def build_export_bytes(cases: list[dict]) -> bytes:
+    """导出工作簿 → xlsx 字节（供 HTTP 下载）。"""
+    buf = io.BytesIO()
+    build_export_workbook(cases).save(buf)
+    return buf.getvalue()
+
+
 # ==================== 上传解析 ====================
 
 def _cell_text(v) -> str:
