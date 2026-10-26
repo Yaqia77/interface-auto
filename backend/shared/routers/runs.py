@@ -205,6 +205,10 @@ def create_run(body: RunCreate, _: dict = Depends(authz.require_perm("run:create
             cmd.append("--cases=" + ",".join(ids))
     if body.vars:
         cmd.append("--vars=" + json.dumps(body.vars, ensure_ascii=False))
+    # 四期并行：workers 仅对 UI 项目（.json 用例）透传；接口/App 批次忽略（参数留在 args 供审计）。
+    # 并行度折算与依赖降级护栏在下游：main.py 折算上限，conftest 收集期决定分片/软串行。
+    if body.workers and f.suffix.lower() == ".json":
+        cmd.append(f"--workers={body.workers}")
 
     run_id = f"api_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
     rec = {

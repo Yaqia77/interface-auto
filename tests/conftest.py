@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pytest  # noqa: E402
+from loguru import logger  # noqa: E402
 
 from core.context import Context, get_env_config, load_config  # noqa: E402
 from core.excel_loader import load as load_excel  # noqa: E402
@@ -16,6 +17,7 @@ from core.http_client import HttpExecutor  # noqa: E402
 from core.log_setup import setup_logging  # noqa: E402
 
 _LOAD_CACHE: dict = {}
+_COLL_LOG_READY = False
 
 
 def pytest_addoption(parser):
@@ -26,6 +28,7 @@ def pytest_addoption(parser):
     parser.addoption("--keyword", default=None, help="按关键字筛选（匹配 用例编号/接口名称/用例描述/URL）")
     parser.addoption("--cases", default=None, help="按用例编号精确选择，逗号分隔（优先于 --module/--priority/--keyword）")
     parser.addoption("--vars", default=None, help='运行前变量覆盖，JSON 对象字符串（覆盖同名 secret/Excel/YAML 变量，优先级低于运行时提取）')
+    parser.addoption("--workers", default=None, help="UI 批次并行 worker 数（四期：>1 时按浏览器分组×分片打 xdist_group；缺省 1=串行）")
 
 
 def _parse_vars(raw):
@@ -236,7 +239,14 @@ def _generate_ui_cases(metafunc):
     dep_map = _load_dep_map()
     if dep_map:
         selected = _ui_topo_order(selected, dep_map)
-    metafunc.parametrize("ui_case", selected, ids=[c.get("case_id", "") for c in selected])
+
+    # 四期并行：workers>1 时按浏览器分组×分片打 xdist_group（依赖护栏在 parallel_params 内）；
+    # workers=1（缺省）走原参数化调用，收集产物与三期形状逐字节一致。
+    workers = _workers_opt(metafunc.config)
+    if workers > 1:
+        metafunc.parametrize("ui_case", parallel_params(selected, workers, dep_map))
+    else:
+        metafunc.parametrize("ui_case", selected, ids=[c.get("case_id", "") for c in selected])
 
 
 def _generate_app_cases(metafunc):
@@ -306,6 +316,94 @@ def _ui_topo_order(selected: list, dep_map: dict) -> list:
     for c in selected:
         emit(c.get("case_id"), set())
     return ordered
+
+
+# ==================== 四期并行：分组×分片（纯函数，供单测直接喂用例列表） ====================
+
+
+def _workers_opt(config) -> int:
+    """读 --workers；非法一律回 1（串行）：并行是加速器不是正确性前提，退化必须无害。"""
+    try:
+        return max(1, int(config.getoption("--workers") or 1))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _ui_spec_group(case: dict) -> str:
+    """xdist 分组键：与 UiRunner 取池口径逐字一致（engine.run：browser 缺省 chromium、headless 缺省 True），
+    保证同一束浏览器钉在同一 worker。channel 不进键（内核回退在 launch 层，不改变池 spec_key）。"""
+    browser = str(case.get("browser") or "chromium").lower()
+    headless = bool(case.get("headless", True))
+    return f"{browser}|{headless}"
+
+
+def build_shard_plan(selected: list, workers: int) -> list:
+    """按 spec 分组后，每组拆 k=min(workers, 组内条数) 片轮转分配（收集期确定、跨进程可复现）。
+
+    返回 [(xdist_group名, [用例dict...])...]；全批浏览器束启动数==分片总数（并行验收口径）。
+    """
+    groups: dict = {}
+    for c in selected:
+        groups.setdefault(_ui_spec_group(c), []).append(c)
+    plan = []
+    for gname, cases in groups.items():
+        k = max(1, min(int(workers), len(cases)))
+        shards: list = [[] for _ in range(k)]
+        for i, c in enumerate(cases):
+            shards[i % k].append(c)
+        for j, sh in enumerate(shards):
+            plan.append((f"{gname}#{j}", sh))
+    return plan
+
+
+def _deps_involved(ids: set, dep_map: dict) -> bool:
+    """本批选中用例是否卷入依赖（作为 key 声明了依赖，或被他人在批内依赖）。"""
+    for cid in ids:
+        if dep_map.get(cid):
+            return True
+    for cid, deps in (dep_map or {}).items():
+        if cid in ids and any(d in ids for d in (deps or [])):
+            return True
+    return False
+
+
+def _ensure_collect_logging() -> None:
+    """收集期日志需要文件 sink（护栏降级/分组计划要落 logs/ 供冒烟核验）；每进程最多初始化一次。"""
+    global _COLL_LOG_READY
+    if _COLL_LOG_READY:
+        return
+    _COLL_LOG_READY = True
+    try:
+        setup_logging(load_config().get("log", {}).get("level", "INFO"))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def parallel_params(selected: list, workers: int, dep_map: dict) -> list:
+    """并行收集产物：每条用例带 xdist_group mark 的 pytest.param 列表（纯函数可单测）。
+
+    依赖护栏：命中 dependencies.json → 整批钉进同一分片（软降级串行）：loadgroup 下同片
+    同 worker 按收集序（已拓扑）执行，case_results 登记表与阻塞检查语义完整保留。
+    """
+    ids = {str(c.get("case_id", "")) for c in selected}
+    note = ""
+    if _deps_involved(ids, dep_map or {}):
+        plan = [("ui-serial#0", list(selected))]
+        note = "（含依赖用例，软降级为串行：整批钉同一 worker，保持拓扑序与结果登记表语义）"
+    else:
+        plan = build_shard_plan(selected, workers)
+    _ensure_collect_logging()
+    logger.info("[并行] worker 上限 {}，分组分片计划：{}{}", workers,
+                "；".join(f"{g} → {len(cs)} 条" for g, cs in plan), note)
+    group_of: dict = {}  # id(case) -> 片名：按 selected 原序产出 param，不扰动拓扑序/行序
+    for gname, cases in plan:
+        for c in cases:
+            group_of[id(c)] = gname
+    return [
+        pytest.param(c, marks=[pytest.mark.xdist_group(group_of[id(c)])],
+                     id=str(c.get("case_id", "")))
+        for c in selected
+    ]
 
 
 @pytest.fixture(scope="session")

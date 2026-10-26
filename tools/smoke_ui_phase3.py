@@ -30,7 +30,9 @@ from pathlib import Path
 
 BASE = os.environ.get("IA_BASE", "http://127.0.0.1:8000").rstrip("/")
 ROOT = Path(__file__).resolve().parents[1]
-LOG_DIR = ROOT / "logs"
+# 执行日志共享文件（与 core/log_setup 同源）：四期后全进程 append 同一文件，
+# 冒烟按发起前偏移量读增量窗口，跨批次不串计。
+LOG_FILE = ROOT / "logs" / "interface-auto_runtime.log"
 FIXTURE_URI = (ROOT / "tests" / "fixtures" / "ui_demo.html").as_uri()
 ADMIN = ("admin", "admin123")
 
@@ -141,15 +143,20 @@ def wait_run_terminal(run_id, timeout=180):
     return last
 
 
-def latest_run_log(after_ts: float) -> str:
-    """取 after_ts 之后新建/写入的最新执行日志（批次 subprocess 的 pytest 日志）。"""
-    files = [f for f in LOG_DIR.glob("interface-auto_*.log") if f.stat().st_mtime >= after_ts]
-    if not files:
-        files = sorted(LOG_DIR.glob("interface-auto_*.log"), key=lambda f: f.stat().st_mtime)
-    if not files:
+def log_offset() -> int:
+    return LOG_FILE.stat().st_size if LOG_FILE.exists() else 0
+
+
+def read_log_since(off: int) -> str:
+    """runtime 日志自 off 字节起的增量（批次 subprocess 的 pytest 日志，全进程共享单文件）。"""
+    if not LOG_FILE.exists():
         return ""
-    newest = max(files, key=lambda f: f.stat().st_mtime)
-    return newest.read_text(encoding="utf-8", errors="replace")
+    try:
+        with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as fp:
+            fp.seek(off)
+            return fp.read()
+    except OSError:
+        return ""
 
 
 def main():
@@ -197,7 +204,7 @@ def main():
         return 1 if _failed else 0
 
     print("== 批次执行（3 条同分组用例：应只启 1 束浏览器） ==")
-    t0 = time.time()
+    log_off = log_offset()  # 增量窗口起点：只计本批次的池活动
     code, resp = req("POST", "/api/runs", {"file": pfile}, ADMIN_TOK)
     check("发起批次 202", code == 202 and resp.get("run_id"), f"{code} {resp}")
     run_id = resp.get("run_id")
@@ -231,8 +238,8 @@ def main():
 
     print("== 执行日志核验：浏览器启动次数 == 分组数（1），非用例数（3） ==")
     log_text = ""
-    for _ in range(10):  # 子进程日志落盘可能有延迟，最多等 5s
-        log_text = latest_run_log(t0 - 2)
+    for _ in range(10):  # enqueue 落盘可能有延迟，最多等 5s
+        log_text = read_log_since(log_off)
         if "批次结束，已回收" in log_text or "新启浏览器束" in log_text:
             break
         time.sleep(0.5)

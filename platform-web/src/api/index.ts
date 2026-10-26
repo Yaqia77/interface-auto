@@ -275,6 +275,7 @@ export const api = {
     cases?: string[];
     vars?: Record<string, unknown>;
     file?: string;
+    workers?: number;
   }) => http.post<RunItem>("/runs", body).then((r) => r.data),
 
   getRun: (runId: string) =>
